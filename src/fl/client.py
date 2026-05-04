@@ -5,18 +5,30 @@ from src.models.lstm import LightweightLSTM
 from src.fl.privacy import get_noisy_feature_importance
 
 class FedStockClient(fl.client.NumPyClient):
-    def __init__(self, cid, train_loader, val_loader, X_train, y_train, input_size, hidden_size=32, epsilon=1.0):
+    def __init__(
+        self,
+        cid,
+        train_loader,
+        val_loader,
+        X_train,
+        y_train,
+        input_size,
+        hidden_size=32,
+        epsilon=1.0,
+        learning_rate=0.001,
+    ):
         self.cid = cid
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.X_train = X_train
         self.y_train = y_train
         self.epsilon = epsilon
+        self.learning_rate = learning_rate
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = LightweightLSTM(input_size=input_size, hidden_size=hidden_size).to(self.device)
         self.criterion = torch.nn.MSELoss()
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
 
     def get_parameters(self, config):
         # Extract weights from PyTorch model to numpy arrays
