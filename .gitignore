@@ -37,6 +37,8 @@ extract_pdfs.py
 *.pth
 *.ckpt
 data/
+src/fedstock_data/
+outputs/
 
 # IDEs and Editors
 .vscode/

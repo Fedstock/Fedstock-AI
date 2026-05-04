@@ -102,3 +102,64 @@ def perform_clustering(noisy_importances):
         isolated_clients.append(int(client_idx))
         
     return best_labels, best_k, multi_client_bubbles, isolated_clients
+
+def run_clustering_pipeline(feature_json_path, output_json_path=None):
+    """
+    Load extracted feature importances from JSON, perform EMD clustering,
+    and return/save the cluster assignments.
+    """
+    import json
+    import os
+    
+    print(f"Loading feature importances from {feature_json_path}...")
+    with open(feature_json_path, 'r') as f:
+        client_data = json.load(f)
+        
+    client_ids = list(client_data.keys())
+    noisy_importances = np.array([client_data[cid] for cid in client_ids])
+    
+    print(f"Loaded {len(client_ids)} clients. Running Agglomerative Clustering with EMD...")
+    labels, k_star, multi_bubbles, isolated = perform_clustering(noisy_importances)
+    
+    # Create output dictionary
+    cluster_assignments = {}
+    for i, cid in enumerate(client_ids):
+        cluster_assignments[cid] = int(labels[i])
+        
+    print(f"\n--- Clustering Results ---")
+    print(f"Optimal number of clusters (k*): {k_star}")
+    
+    # Print clients in each cluster
+    for k in range(k_star):
+        members = [client_ids[i] for i, label in enumerate(labels) if label == k]
+        print(f"Cluster {k}: {members}")
+        
+    print(f"\nMulti-client bubbles (for standard FL): {multi_bubbles}")
+    print(f"Isolated clients (for personalized FL): {[client_ids[i] for i in isolated]}")
+    
+    if output_json_path:
+        os.makedirs(os.path.dirname(output_json_path), exist_ok=True)
+        with open(output_json_path, 'w') as f:
+            json.dump({
+                "k_star": int(k_star),
+                "assignments": cluster_assignments,
+                "isolated_clients": [client_ids[i] for i in isolated]
+            }, f, indent=4)
+        print(f"\nSaved clustering results to {output_json_path}")
+        
+    return cluster_assignments
+
+if __name__ == "__main__":
+    import os
+    
+    # 프로젝트 루트 경로 (현재 파일 기준)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(current_dir))
+    
+    INPUT_JSON = os.path.join(project_root, "outputs", "feature_importances.json")
+    OUTPUT_JSON = os.path.join(project_root, "outputs", "clustering_results.json")
+    
+    if not os.path.exists(INPUT_JSON):
+        print(f"Error: {INPUT_JSON} not found. Please run extract_features.py first.")
+    else:
+        run_clustering_pipeline(INPUT_JSON, OUTPUT_JSON)
