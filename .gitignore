@@ -54,3 +54,8 @@ outputs/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Documentation
+*.md
+!README.md
+

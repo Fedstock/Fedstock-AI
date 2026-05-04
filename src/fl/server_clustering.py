@@ -43,10 +43,98 @@ def compute_emd_distance_matrix(normalized_importances):
             
     return dist_matrix
 
-def perform_clustering(noisy_importances):
+def _fit_agglomerative(dist_matrix, n_clusters):
+    """
+    Fit agglomerative clustering with a precomputed distance matrix.
+    """
+    clustering = AgglomerativeClustering(
+        n_clusters=n_clusters,
+        metric='precomputed',
+        linkage='average',
+    )
+    return clustering.fit_predict(dist_matrix)
+
+def _compact_labels(labels):
+    """
+    Re-map cluster labels to a dense 0..k-1 range.
+    """
+    unique_labels = sorted(set(labels))
+    mapping = {old: new for new, old in enumerate(unique_labels)}
+    return np.array([mapping[label] for label in labels], dtype=int)
+
+def _resolve_max_clusters(n_clients, max_clusters):
+    """
+    Keep the k search space conservative. Searching up to n_clients - 1 tends to
+    favor fragmented clusters when client distributions are heterogeneous.
+    """
+    if max_clusters is None:
+        max_clusters = int(np.ceil(np.sqrt(n_clients)))
+    return max(2, min(n_clients - 1, max_clusters))
+
+def _candidate_score(normalized, labels, k, complexity_penalty, singleton_penalty):
+    """
+    DBI alone does not penalize singleton-heavy solutions enough for this PA-CFL
+    use case. Add small penalties so FL bubbles stay useful unless the data
+    strongly supports a split.
+    """
+    dbi = davies_bouldin_score(normalized, labels)
+    labels_counts = np.bincount(labels)
+    singleton_count = int(np.sum(labels_counts == 1))
+    score = dbi + complexity_penalty * max(0, k - 2) + singleton_penalty * singleton_count
+    return score, dbi, singleton_count
+
+def _merge_non_isolated_singletons(labels, dist_matrix, isolation_std_multiplier):
+    """
+    Merge singleton clusters back into the nearest multi-client cluster unless
+    the singleton is far enough to be treated as a true isolated client.
+    """
+    labels = np.array(labels, dtype=int).copy()
+    nonzero_distances = dist_matrix[dist_matrix > 0]
+    if nonzero_distances.size == 0:
+        return _compact_labels(labels)
+
+    isolation_threshold = (
+        float(nonzero_distances.mean())
+        + float(nonzero_distances.std()) * isolation_std_multiplier
+    )
+
+    for cluster_id in sorted(set(labels)):
+        members = np.where(labels == cluster_id)[0]
+        if len(members) != 1:
+            continue
+
+        client_idx = members[0]
+        target_cluster = None
+        target_distance = float('inf')
+
+        for other_cluster_id in sorted(set(labels)):
+            if other_cluster_id == cluster_id:
+                continue
+
+            other_members = np.where(labels == other_cluster_id)[0]
+            if len(other_members) == 0:
+                continue
+
+            avg_distance = float(dist_matrix[client_idx, other_members].mean())
+            if avg_distance < target_distance:
+                target_distance = avg_distance
+                target_cluster = other_cluster_id
+
+        if target_cluster is not None and target_distance <= isolation_threshold:
+            labels[client_idx] = target_cluster
+
+    return _compact_labels(labels)
+
+def perform_clustering(
+    noisy_importances,
+    max_clusters=None,
+    complexity_penalty=0.08,
+    singleton_penalty=0.25,
+    isolation_std_multiplier=0.75,
+):
     """
     Perform Agglomerative Clustering and find the optimal number of clusters 
-    using the Davies-Bouldin Index.
+    using a regularized Davies-Bouldin Index.
     
     Returns:
     - optimal_labels: Cluster assignment for each client
@@ -63,25 +151,28 @@ def perform_clustering(noisy_importances):
         return np.zeros(n_clients, dtype=int), 1, [0], []
         
     best_k = 2
-    best_dbi = float('inf')
+    best_score = float('inf')
     best_labels = None
     
-    # Test k from 2 to n_clients - 1
-    max_k = min(n_clients - 1, 10)  # Limiting max clusters
+    max_k = _resolve_max_clusters(n_clients, max_clusters)
     
     for k in range(2, max_k + 1):
-        # We must use 'precomputed' affinity for custom distance matrix
-        clustering = AgglomerativeClustering(n_clusters=k, metric='precomputed', linkage='average')
-        labels = clustering.fit_predict(dist_matrix)
+        labels = _fit_agglomerative(dist_matrix, k)
         
         # Calculate Davies-Bouldin Index
         # DBI requires original coordinates or we can use the distance matrix indirectly.
         # But sklearn's davies_bouldin_score expects feature array, not distance matrix.
         # So we pass the normalized distributions as features.
         try:
-            dbi = davies_bouldin_score(normalized, labels)
-            if dbi < best_dbi:
-                best_dbi = dbi
+            score, _, _ = _candidate_score(
+                normalized,
+                labels,
+                k,
+                complexity_penalty,
+                singleton_penalty,
+            )
+            if score < best_score:
+                best_score = score
                 best_k = k
                 best_labels = labels
         except ValueError:
@@ -90,6 +181,13 @@ def perform_clustering(noisy_importances):
     if best_labels is None:
         best_labels = np.zeros(n_clients, dtype=int)
         best_k = 1
+    else:
+        best_labels = _merge_non_isolated_singletons(
+            best_labels,
+            dist_matrix,
+            isolation_std_multiplier,
+        )
+        best_k = len(set(best_labels))
         
     # Analyze bubbles
     labels_counts = np.bincount(best_labels)
