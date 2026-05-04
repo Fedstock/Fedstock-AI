@@ -11,13 +11,14 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from sklearn.feature_selection import f_regression
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 from xgboost import XGBRegressor
 
 
 CLIENT_IDS = ("CA_1", "CA_2", "CA_3", "CA_4", "TX_1", "TX_2", "TX_3", "WI_1", "WI_2", "WI_3")
-FEATURE_COLS = [
+CANDIDATE_FEATURE_COLS = [
     "sales",
     "sell_price",
     "wday",
@@ -86,15 +87,8 @@ class LightweightLSTM(nn.Module):
         return self.fc(out[:, -1, :])
 
 
-def load_split_csv(client_dir, split):
-    path = client_dir / f"{split}.csv"
-    if not path.exists():
-        raise FileNotFoundError(f"Missing {split}.csv: {path}")
-    columns = INDEX_COLS + FEATURE_COLS + [TARGET_COL]
-    df = pd.read_csv(path, usecols=columns)
-    df = df.replace([np.inf, -np.inf], np.nan).dropna()
-    df["date"] = pd.to_datetime(df["date"])
-    return df
+def clean_frame(df):
+    return df.replace([np.inf, -np.inf], np.nan).dropna()
 
 
 def sample_frame(df, max_samples, seed):
@@ -103,42 +97,98 @@ def sample_frame(df, max_samples, seed):
     return df
 
 
-def extract_feature_importances(data_dir, output_path, max_samples, xgb_estimators, seed, logger):
+def load_split_csv(client_dir, split, feature_cols):
+    path = client_dir / f"{split}.csv"
+    if not path.exists():
+        raise FileNotFoundError(f"Missing {split}.csv: {path}")
+    columns = INDEX_COLS + feature_cols + [TARGET_COL]
+    df = pd.read_csv(path, usecols=columns)
+    df = clean_frame(df)
+    df["date"] = pd.to_datetime(df["date"])
+    return df
+
+
+def load_numeric_split(client_dir, split, feature_cols):
+    path = client_dir / f"{split}.csv"
+    columns = feature_cols + [TARGET_COL]
+    return clean_frame(pd.read_csv(path, usecols=columns))
+
+
+def select_features(data_dir, config, output_path, logger):
+    frames = []
+    selection_seed = config["seeds"][0]
+    for client_id in CLIENT_IDS:
+        df = load_numeric_split(data_dir / client_id, "train", CANDIDATE_FEATURE_COLS)
+        df = sample_frame(df, config["feature_selection_max_samples_per_client"], selection_seed)
+        frames.append(df)
+    train_df = pd.concat(frames, ignore_index=True)
+
+    X = train_df[CANDIDATE_FEATURE_COLS].to_numpy(dtype=np.float32)
+    y = train_df[TARGET_COL].to_numpy(dtype=np.float32)
+    f_values, p_values = f_regression(X, y)
+    f_values = np.nan_to_num(f_values, nan=0.0, posinf=0.0, neginf=0.0)
+    p_values = np.nan_to_num(p_values, nan=1.0, posinf=1.0, neginf=1.0)
+    scores = {col: float(score) for col, score in zip(CANDIDATE_FEATURE_COLS, f_values)}
+    pvals = {col: float(pval) for col, pval in zip(CANDIDATE_FEATURE_COLS, p_values)}
+
+    corr = train_df[CANDIDATE_FEATURE_COLS].corr().abs()
+    dropped = set()
+    for i, left in enumerate(CANDIDATE_FEATURE_COLS):
+        for right in CANDIDATE_FEATURE_COLS[i + 1 :]:
+            if left in dropped or right in dropped:
+                continue
+            value = corr.loc[left, right]
+            if pd.notna(value) and value >= config["corr_threshold"]:
+                drop = left if scores[left] < scores[right] else right
+                dropped.add(drop)
+
+    pruned = [col for col in CANDIDATE_FEATURE_COLS if col not in dropped]
+    top_k = min(config["anova_top_k"], len(pruned))
+    selected = sorted(pruned, key=lambda col: scores[col], reverse=True)[:top_k]
+    selected = [col for col in CANDIDATE_FEATURE_COLS if col in selected]
+
+    result = {
+        "candidate_features": CANDIDATE_FEATURE_COLS,
+        "correlation_threshold": config["corr_threshold"],
+        "correlation_pruned_features": sorted(dropped),
+        "anova_top_k": config["anova_top_k"],
+        "selected_features": selected,
+        "f_scores": scores,
+        "p_values": pvals,
+        "rows_used": int(len(train_df)),
+        "source": "all clients' train.csv only",
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(result, f, indent=4)
+    logger.info("Feature selection rows=%d selected=%s pruned=%s", len(train_df), selected, sorted(dropped))
+    return selected, result
+
+
+def extract_feature_importances(data_dir, output_path, feature_cols, config, logger):
     logger.info("Extracting feature importances from train.csv only")
     feature_importances = {}
     for client_id in CLIENT_IDS:
-        train_df = load_split_csv(data_dir / client_id, "train")
-        train_df = sample_frame(train_df, max_samples, seed)
-        X = train_df[FEATURE_COLS].to_numpy(dtype=np.float32)
+        train_df = load_numeric_split(data_dir / client_id, "train", feature_cols)
+        train_df = sample_frame(train_df, config["max_samples"], config["seed"])
+        X = train_df[feature_cols].to_numpy(dtype=np.float32)
         y = train_df[TARGET_COL].to_numpy(dtype=np.float32)
 
         model = XGBRegressor(
-            n_estimators=xgb_estimators,
-            random_state=seed,
+            n_estimators=config["xgb_estimators"],
+            random_state=config["seed"],
             n_jobs=-1,
             tree_method="hist",
             objective="reg:squarederror",
         )
         model.fit(X, y)
         feature_importances[client_id] = model.feature_importances_.astype(float).tolist()
-        logger.info("%s feature importance rows=%d features=%d", client_id, len(train_df), len(FEATURE_COLS))
+        logger.info("%s feature importance rows=%d features=%d", client_id, len(train_df), len(feature_cols))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(feature_importances, f, indent=4)
     return feature_importances
-
-
-def normalize_importances(importances):
-    normalized = []
-    for imp in importances:
-        non_negative = np.maximum(np.asarray(imp, dtype=float), 0.0)
-        total = non_negative.sum()
-        if total <= 0:
-            normalized.append(np.ones_like(non_negative) / len(non_negative))
-        else:
-            normalized.append(non_negative / total)
-    return np.asarray(normalized)
 
 
 def run_server_clustering(feature_importances, output_path, config, logger):
@@ -165,6 +215,7 @@ def run_server_clustering(feature_importances, output_path, config, logger):
         "k_star": int(k_star),
         "assignments": assignments,
         "isolated_clients": isolated_clients,
+        "max_clusters": int(config["max_clusters"]),
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:
@@ -173,7 +224,7 @@ def run_server_clustering(feature_importances, output_path, config, logger):
     clusters = {}
     for cid, label in assignments.items():
         clusters.setdefault(label, []).append(cid)
-    logger.info("Server clustering k_star=%d", k_star)
+    logger.info("Server clustering k_star=%d max_clusters=%d", k_star, config["max_clusters"])
     for label in sorted(clusters):
         logger.info("Cluster %s: %s", label, clusters[label])
     logger.info("Isolated clients: %s", isolated_clients)
@@ -181,22 +232,19 @@ def run_server_clustering(feature_importances, output_path, config, logger):
     return output, clusters
 
 
-def fit_global_scaler(data_dir, logger):
+def fit_global_scaler(data_dir, feature_cols, logger):
     scaler = StandardScaler()
     total_rows = 0
     for client_id in CLIENT_IDS:
         train_path = data_dir / client_id / "train.csv"
-        if not train_path.exists():
-            raise FileNotFoundError(f"Missing train.csv: {train_path}")
-        df = pd.read_csv(train_path, usecols=FEATURE_COLS)
-        df = df.replace([np.inf, -np.inf], np.nan).dropna()
+        df = clean_frame(pd.read_csv(train_path, usecols=feature_cols))
         scaler.partial_fit(df.to_numpy(dtype=np.float32))
         total_rows += len(df)
     logger.info("Global scaler fitted on train.csv only: rows=%d clients=%d", total_rows, len(CLIENT_IDS))
     return scaler
 
 
-def make_sequences(context_df, eval_df, scaler, config):
+def make_sequences(context_df, eval_df, scaler, feature_cols, config):
     seq_len = config["sequence_length"]
     context = context_df.copy()
     context["_is_eval"] = False
@@ -208,7 +256,7 @@ def make_sequences(context_df, eval_df, scaler, config):
     X_parts = []
     y_parts = []
     for _, group in combined.groupby("item_id", sort=False):
-        features = scaler.transform(group[FEATURE_COLS].to_numpy(dtype=np.float32)).astype(np.float32)
+        features = scaler.transform(group[feature_cols].to_numpy(dtype=np.float32)).astype(np.float32)
         targets = group[TARGET_COL].to_numpy(dtype=np.float32)
         eval_mask = group["_is_eval"].to_numpy(dtype=bool)
         eval_positions = np.flatnonzero(eval_mask)
@@ -216,25 +264,23 @@ def make_sequences(context_df, eval_df, scaler, config):
         if len(valid_positions) == 0:
             continue
 
-        item_X = np.stack([features[pos - seq_len + 1 : pos + 1] for pos in valid_positions])
-        item_y = targets[valid_positions]
-        X_parts.append(item_X)
-        y_parts.append(item_y)
+        X_parts.append(np.stack([features[pos - seq_len + 1 : pos + 1] for pos in valid_positions]))
+        y_parts.append(targets[valid_positions])
 
     if not X_parts:
         raise ValueError(f"No sequences produced. sequence_length={seq_len} may be too large.")
     return np.concatenate(X_parts, axis=0), np.concatenate(y_parts, axis=0)
 
 
-def prepare_client_data(data_dir, client_id, scaler, config):
+def prepare_client_data(data_dir, client_id, scaler, feature_cols, config):
     client_dir = data_dir / client_id
-    train_df = load_split_csv(client_dir, "train")
-    valid_df = load_split_csv(client_dir, "valid")
-    test_df = load_split_csv(client_dir, "test")
+    train_df = load_split_csv(client_dir, "train", feature_cols)
+    valid_df = load_split_csv(client_dir, "valid", feature_cols)
+    test_df = load_split_csv(client_dir, "test", feature_cols)
 
-    X_train, y_train = make_sequences(pd.DataFrame(columns=train_df.columns), train_df, scaler, config)
-    X_valid, y_valid = make_sequences(train_df, valid_df, scaler, config)
-    X_test, y_test = make_sequences(pd.concat([train_df, valid_df], ignore_index=True), test_df, scaler, config)
+    X_train, y_train = make_sequences(pd.DataFrame(columns=train_df.columns), train_df, scaler, feature_cols, config)
+    X_valid, y_valid = make_sequences(train_df, valid_df, scaler, feature_cols, config)
+    X_test, y_test = make_sequences(pd.concat([train_df, valid_df], ignore_index=True), test_df, scaler, feature_cols, config)
 
     if config["train_max_samples"] and len(y_train) > config["train_max_samples"]:
         rng = np.random.default_rng(config["seed"])
@@ -255,6 +301,22 @@ def prepare_client_data(data_dir, client_id, scaler, config):
         "valid_samples": len(y_valid),
         "test_samples": len(y_test),
     }
+
+
+def prepare_all_clients(data_dir, feature_cols, config, logger):
+    scaler = fit_global_scaler(data_dir, feature_cols, logger)
+    clients = {}
+    for client_id in CLIENT_IDS:
+        clients[client_id] = prepare_client_data(data_dir, client_id, scaler, feature_cols, config)
+        logger.info(
+            "%s prepared sequences train=%d valid=%d test=%d seq_len=%d",
+            client_id,
+            clients[client_id]["train_samples"],
+            clients[client_id]["valid_samples"],
+            clients[client_id]["test_samples"],
+            config["sequence_length"],
+        )
+    return clients
 
 
 def train_one_epoch(model, loader, optimizer, criterion, device):
@@ -285,10 +347,25 @@ def evaluate(model, loader, device):
             targets.append(y.numpy().reshape(-1))
     pred = np.concatenate(preds)
     target = np.concatenate(targets)
-    rmse = float(np.sqrt(np.mean((pred - target) ** 2)))
+    sse = float(np.sum((pred - target) ** 2))
+    sum_y = float(np.sum(target))
+    sum_y2 = float(np.sum(target**2))
+    n = int(len(target))
+    rmse = float(np.sqrt(sse / n))
     mae = float(np.mean(np.abs(pred - target)))
     smape = float(np.mean(2.0 * np.abs(pred - target) / (np.abs(target) + np.abs(pred) + 1e-8)) * 100.0)
-    return {"rmse": rmse, "mae": mae, "smape": smape, "num_samples": int(len(target))}
+    sst = sum_y2 - (sum_y * sum_y / n)
+    r2 = float(1.0 - sse / sst) if sst > 0 else 0.0
+    return {
+        "rmse": rmse,
+        "mae": mae,
+        "smape": smape,
+        "r2": r2,
+        "num_samples": n,
+        "sse": sse,
+        "sum_y": sum_y,
+        "sum_y2": sum_y2,
+    }
 
 
 def average_state_dicts(states, weights):
@@ -299,112 +376,206 @@ def average_state_dicts(states, weights):
     return averaged
 
 
-def weighted_metrics(rows):
+def aggregate_metrics(rows):
     total = sum(row["num_samples"] for row in rows)
+    sse = sum(row["sse"] for row in rows)
+    sum_y = sum(row["sum_y"] for row in rows)
+    sum_y2 = sum(row["sum_y2"] for row in rows)
+    sst = sum_y2 - (sum_y * sum_y / total)
     return {
-        "rmse": sum(row["rmse"] * row["num_samples"] for row in rows) / total,
-        "mae": sum(row["mae"] * row["num_samples"] for row in rows) / total,
-        "smape": sum(row["smape"] * row["num_samples"] for row in rows) / total,
+        "rmse": float(np.sqrt(sse / total)),
+        "mae": float(sum(row["mae"] * row["num_samples"] for row in rows) / total),
+        "smape": float(sum(row["smape"] * row["num_samples"] for row in rows) / total),
+        "r2": float(1.0 - sse / sst) if sst > 0 else 0.0,
         "num_samples": int(total),
+        "sse": float(sse),
+        "sum_y": float(sum_y),
+        "sum_y2": float(sum_y2),
     }
 
 
-def train_pipeline(data_dir, clusters, isolated_clients, config, logger):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Training device: %s", device)
-    scaler = fit_global_scaler(data_dir, logger)
-    clients = {}
-    for client_id in CLIENT_IDS:
-        clients[client_id] = prepare_client_data(data_dir, client_id, scaler, config)
-        logger.info(
-            "%s prepared sequences train=%d valid=%d test=%d seq_len=%d",
-            client_id,
-            clients[client_id]["train_samples"],
-            clients[client_id]["valid_samples"],
-            clients[client_id]["test_samples"],
-            config["sequence_length"],
-        )
+def compact_metrics(row):
+    return {key: row[key] for key in ("rmse", "mae", "smape", "r2", "num_samples")}
 
-    input_size = len(FEATURE_COLS)
+
+def train_fedavg_group(label, members, clients, feature_cols, config, device, logger, stage):
+    criterion = nn.MSELoss()
+    global_model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
+    history = []
+    for round_idx in range(1, config["num_rounds"] + 1):
+        local_states = []
+        weights = []
+        for client_id in members:
+            local_model = copy.deepcopy(global_model).to(device)
+            optimizer = torch.optim.Adam(local_model.parameters(), lr=config["learning_rate"])
+            for _ in range(config["epochs_per_round"]):
+                train_one_epoch(local_model, clients[client_id]["train_loader"], optimizer, criterion, device)
+            local_states.append({k: v.detach().cpu().clone() for k, v in local_model.state_dict().items()})
+            weights.append(clients[client_id]["train_samples"])
+        global_model.load_state_dict(average_state_dicts(local_states, weights))
+
+        val_rows = []
+        for client_id in members:
+            row = evaluate(global_model, clients[client_id]["valid_loader"], device)
+            row.update({"client_id": client_id, "cluster": int(label), "round": round_idx, "stage": stage})
+            val_rows.append(row)
+        summary = aggregate_metrics(val_rows)
+        logger.info(
+            "[%s %s] round %d/%d valid RMSE=%.4f MAE=%.4f R2=%.4f SMAPE=%.4f",
+            stage,
+            label,
+            round_idx,
+            config["num_rounds"],
+            summary["rmse"],
+            summary["mae"],
+            summary["r2"],
+            summary["smape"],
+        )
+        history.extend(val_rows)
+    return {client_id: global_model for client_id in members}, history
+
+
+def train_local_models(clients, feature_cols, config, device, logger):
     criterion = nn.MSELoss()
     final_models = {}
     history = []
-    isolated_set = set(isolated_clients)
+    total_epochs = config["num_rounds"] * config["epochs_per_round"]
+    for client_id in CLIENT_IDS:
+        model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=config["learning_rate"])
+        for epoch in range(1, total_epochs + 1):
+            train_one_epoch(model, clients[client_id]["train_loader"], optimizer, criterion, device)
+            row = evaluate(model, clients[client_id]["valid_loader"], device)
+            row.update({"client_id": client_id, "cluster": -1, "round": epoch, "stage": "local_valid"})
+            history.append(row)
+        final_models[client_id] = model
+        logger.info("[Local %s] epochs=%d valid RMSE=%.4f MAE=%.4f R2=%.4f", client_id, total_epochs, row["rmse"], row["mae"], row["r2"])
+    return final_models, history
 
+
+def train_full_fedavg(clients, feature_cols, config, device, logger):
+    logger.info("[Full FedAvg] members=%s", list(CLIENT_IDS))
+    return train_fedavg_group(0, list(CLIENT_IDS), clients, feature_cols, config, device, logger, "full_fedavg_valid")
+
+
+def train_pa_cfl(clients, clusters, isolated_clients, feature_cols, config, device, logger):
+    final_models = {}
+    history = []
+    isolated_set = set(isolated_clients)
     for label, members in sorted(clusters.items()):
         if len(members) == 1 and members[0] in isolated_set:
             continue
-        logger.info("[Bubble %s] FedAvg members=%s", label, members)
-        global_model = LightweightLSTM(input_size=input_size, hidden_size=config["hidden_size"]).to(device)
-        for round_idx in range(1, config["num_rounds"] + 1):
-            local_states = []
-            weights = []
-            for client_id in members:
-                local_model = copy.deepcopy(global_model).to(device)
-                optimizer = torch.optim.Adam(local_model.parameters(), lr=config["learning_rate"])
-                for _ in range(config["epochs_per_round"]):
-                    train_one_epoch(local_model, clients[client_id]["train_loader"], optimizer, criterion, device)
-                local_states.append({k: v.detach().cpu().clone() for k, v in local_model.state_dict().items()})
-                weights.append(clients[client_id]["train_samples"])
-            global_model.load_state_dict(average_state_dicts(local_states, weights))
+        logger.info("[PA-CFL Bubble %s] FedAvg members=%s", label, members)
+        models, rows = train_fedavg_group(label, members, clients, feature_cols, config, device, logger, "pa_cfl_valid")
+        final_models.update(models)
+        history.extend(rows)
 
-            val_rows = []
-            for client_id in members:
-                row = evaluate(global_model, clients[client_id]["valid_loader"], device)
-                row.update({"client_id": client_id, "cluster": int(label), "stage": "federated_valid", "round": round_idx})
-                val_rows.append(row)
-            summary = weighted_metrics(val_rows)
-            logger.info(
-                "[Bubble %s] round %d/%d valid RMSE=%.4f MAE=%.4f SMAPE=%.4f",
-                label,
-                round_idx,
-                config["num_rounds"],
-                summary["rmse"],
-                summary["mae"],
-                summary["smape"],
-            )
-            history.extend(val_rows)
-
-        for client_id in members:
-            final_models[client_id] = global_model
-
+    criterion = nn.MSELoss()
     for client_id in isolated_clients:
-        logger.info("[Personalized] local training client=%s", client_id)
-        model = LightweightLSTM(input_size=input_size, hidden_size=config["hidden_size"]).to(device)
+        logger.info("[PA-CFL Personalized] client=%s", client_id)
+        model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=config["learning_rate"])
         for epoch in range(1, config["personalized_epochs"] + 1):
-            train_loss = train_one_epoch(model, clients[client_id]["train_loader"], optimizer, criterion, device)
-            val = evaluate(model, clients[client_id]["valid_loader"], device)
-            logger.info(
-                "[Personalized %s] epoch %d/%d train_loss=%.4f valid RMSE=%.4f MAE=%.4f SMAPE=%.4f",
-                client_id,
-                epoch,
-                config["personalized_epochs"],
-                train_loss,
-                val["rmse"],
-                val["mae"],
-                val["smape"],
-            )
+            train_one_epoch(model, clients[client_id]["train_loader"], optimizer, criterion, device)
+            row = evaluate(model, clients[client_id]["valid_loader"], device)
+            row.update({"client_id": client_id, "cluster": int(next(k for k, v in clusters.items() if client_id in v)), "round": epoch, "stage": "pa_cfl_personalized_valid"})
+            history.append(row)
         final_models[client_id] = model
+    return final_models, history
 
-    test_rows = []
+
+def evaluate_test_models(models, clients, clusters, device, logger, method):
+    rows = []
     for client_id in CLIENT_IDS:
-        row = evaluate(final_models[client_id], clients[client_id]["test_loader"], device)
-        row.update({"client_id": client_id, "cluster": int(next(k for k, v in clusters.items() if client_id in v))})
-        test_rows.append(row)
+        row = evaluate(models[client_id], clients[client_id]["test_loader"], device)
+        cluster = int(next((k for k, v in clusters.items() if client_id in v), -1))
+        row.update({"client_id": client_id, "cluster": cluster, "method": method})
+        rows.append(row)
         logger.info(
-            "[Test %s] cluster=%s RMSE=%.4f MAE=%.4f SMAPE=%.4f",
+            "[Test %s %s] cluster=%s RMSE=%.4f MAE=%.4f R2=%.4f SMAPE=%.4f",
+            method,
             client_id,
-            row["cluster"],
+            cluster,
             row["rmse"],
             row["mae"],
+            row["r2"],
             row["smape"],
         )
-    return history, test_rows, weighted_metrics(test_rows)
+    return rows, aggregate_metrics(rows)
+
+
+def run_single_seed(data_dir, outputs_dir, feature_cols, feature_selection, seed, base_config, logger):
+    config = dict(base_config)
+    config["seed"] = seed
+    set_seed(seed)
+    logger.info("=== Repeat seed=%d started ===", seed)
+
+    feature_path = outputs_dir / f"feature_importances_seed_{seed}.json"
+    clustering_path = outputs_dir / f"clustering_results_seed_{seed}.json"
+    feature_importances = extract_feature_importances(data_dir, feature_path, feature_cols, config, logger)
+    clustering_result, pa_clusters = run_server_clustering(feature_importances, clustering_path, config, logger)
+    if seed == base_config["seeds"][0]:
+        with (outputs_dir / "feature_importances.json").open("w", encoding="utf-8") as f:
+            json.dump(feature_importances, f, indent=4)
+        with (outputs_dir / "clustering_results.json").open("w", encoding="utf-8") as f:
+            json.dump(clustering_result, f, indent=4)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info("Training device: %s", device)
+    clients = prepare_all_clients(data_dir, feature_cols, config, logger)
+
+    local_models, local_history = train_local_models(clients, feature_cols, config, device, logger)
+    local_rows, local_summary = evaluate_test_models(local_models, clients, {-1: list(CLIENT_IDS)}, device, logger, "local")
+
+    full_models, full_history = train_full_fedavg(clients, feature_cols, config, device, logger)
+    full_rows, full_summary = evaluate_test_models(full_models, clients, {0: list(CLIENT_IDS)}, device, logger, "full_fedavg")
+
+    pa_models, pa_history = train_pa_cfl(clients, pa_clusters, clustering_result["isolated_clients"], feature_cols, config, device, logger)
+    pa_rows, pa_summary = evaluate_test_models(pa_models, clients, pa_clusters, device, logger, "pa_cfl")
+
+    summaries = {
+        "local": compact_metrics(local_summary),
+        "full_fedavg": compact_metrics(full_summary),
+        "pa_cfl": compact_metrics(pa_summary),
+    }
+    logger.info("=== Repeat seed=%d summary: %s ===", seed, json.dumps(summaries, sort_keys=True))
+    return {
+        "seed": seed,
+        "config": config,
+        "feature_selection": feature_selection,
+        "clustering": clustering_result,
+        "validation_history": local_history + full_history + pa_history,
+        "test_by_client": {
+            "local": [compact_metrics(row) | {"client_id": row["client_id"], "cluster": row["cluster"]} for row in local_rows],
+            "full_fedavg": [compact_metrics(row) | {"client_id": row["client_id"], "cluster": row["cluster"]} for row in full_rows],
+            "pa_cfl": [compact_metrics(row) | {"client_id": row["client_id"], "cluster": row["cluster"]} for row in pa_rows],
+        },
+        "test_summary": summaries,
+    }
+
+
+def summarize_repeats(repeats):
+    methods = ("local", "full_fedavg", "pa_cfl")
+    metrics = ("rmse", "mae", "smape", "r2")
+    summary = {}
+    for method in methods:
+        summary[method] = {}
+        for metric in metrics:
+            values = np.array([repeat["test_summary"][method][metric] for repeat in repeats], dtype=float)
+            summary[method][metric] = {
+                "mean": float(values.mean()),
+                "std": float(values.std(ddof=1)) if len(values) > 1 else 0.0,
+            }
+        summary[method]["num_samples"] = repeats[0]["test_summary"][method]["num_samples"]
+    return summary
+
+
+def parse_seeds(value):
+    return [int(part.strip()) for part in value.split(",") if part.strip()]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run CSV-based PA-CFL pipeline.")
+    parser = argparse.ArgumentParser(description="Run CSV-based PA-CFL with baselines and repeated evaluation.")
     parser.add_argument("--max-samples", type=int, default=200000)
     parser.add_argument("--xgb-estimators", type=int, default=200)
     parser.add_argument("--train-max-samples", type=int, default=0)
@@ -415,20 +586,24 @@ def main():
     parser.add_argument("--hidden-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=0.003)
     parser.add_argument("--sequence-length", type=int, default=28)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max-clusters", type=int, default=5)
+    parser.add_argument("--corr-threshold", type=float, default=0.95)
+    parser.add_argument("--anova-top-k", type=int, default=12)
+    parser.add_argument("--feature-selection-max-samples-per-client", type=int, default=0)
+    parser.add_argument("--seeds", default="42,43,44,45,46")
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent
     data_dir = project_root / "src" / "fedstock_data" / "outputs" / "clients"
     outputs_dir = project_root / "outputs"
     logger, log_path = setup_logger(outputs_dir / "logs")
-    set_seed(args.seed)
 
-    config = {
-        "seed": args.seed,
+    seeds = parse_seeds(args.seeds)
+    base_config = {
+        "seeds": seeds,
         "max_samples": args.max_samples,
         "xgb_estimators": args.xgb_estimators,
-        "max_clusters": 3,
+        "max_clusters": args.max_clusters,
         "complexity_penalty": 0.10,
         "singleton_penalty": 0.35,
         "isolation_std_multiplier": 1.0,
@@ -440,56 +615,44 @@ def main():
         "hidden_size": args.hidden_size,
         "learning_rate": args.learning_rate,
         "sequence_length": args.sequence_length,
-        "feature_cols": FEATURE_COLS,
+        "candidate_feature_cols": CANDIDATE_FEATURE_COLS,
         "target_col": TARGET_COL,
         "server_clustering_source": "train.csv only",
         "scaler": "global StandardScaler fitted on all clients' train.csv only",
+        "corr_threshold": args.corr_threshold,
+        "anova_top_k": args.anova_top_k,
+        "feature_selection_max_samples_per_client": args.feature_selection_max_samples_per_client or None,
     }
-    logger.info("CSV PA-CFL pipeline started")
-    logger.info("Config: %s", json.dumps(config, ensure_ascii=False, sort_keys=True))
+    logger.info("CSV PA-CFL repeated experiment started")
+    logger.info("Base config: %s", json.dumps(base_config, ensure_ascii=False, sort_keys=True))
 
     started = time.time()
-    feature_path = outputs_dir / "feature_importances.json"
-    clustering_path = outputs_dir / "clustering_results.json"
-    feature_importances = extract_feature_importances(
-        data_dir,
-        feature_path,
-        args.max_samples,
-        args.xgb_estimators,
-        args.seed,
-        logger,
-    )
-    clustering_result, clusters = run_server_clustering(
-        feature_importances,
-        clustering_path,
-        config,
-        logger,
-    )
-    history, test_rows, test_summary = train_pipeline(
-        data_dir,
-        clusters,
-        clustering_result["isolated_clients"],
-        config,
-        logger,
-    )
+    feature_selection_path = outputs_dir / "feature_selection.json"
+    feature_cols, feature_selection = select_features(data_dir, base_config, feature_selection_path, logger)
+    base_config["feature_cols"] = feature_cols
 
+    repeats = []
+    for seed in seeds:
+        repeats.append(run_single_seed(data_dir, outputs_dir, feature_cols, feature_selection, seed, base_config, logger))
+
+    aggregate = summarize_repeats(repeats)
     elapsed = time.time() - started
     result = {
         "elapsed_seconds": elapsed,
-        "config": config,
-        "clustering": clustering_result,
-        "validation_history": history,
-        "test_by_client": test_rows,
-        "test_summary": test_summary,
+        "config": base_config,
+        "feature_selection": feature_selection,
+        "repeats": repeats,
+        "aggregate_summary": aggregate,
         "log_path": str(log_path),
     }
     results_dir = outputs_dir / "experiments"
     results_dir.mkdir(parents=True, exist_ok=True)
-    result_path = results_dir / f"csv_pipeline_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    result_path = results_dir / f"csv_baseline_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     with result_path.open("w", encoding="utf-8") as f:
         json.dump(result, f, indent=4, ensure_ascii=False)
-    logger.info("CSV PA-CFL pipeline finished in %.2fs", elapsed)
-    logger.info("Final test summary: %s", json.dumps(test_summary, sort_keys=True))
+
+    logger.info("CSV PA-CFL repeated experiment finished in %.2fs", elapsed)
+    logger.info("Aggregate summary: %s", json.dumps(aggregate, sort_keys=True))
     logger.info("Saved results: %s", result_path)
     logger.info("Log file: %s", log_path)
 
