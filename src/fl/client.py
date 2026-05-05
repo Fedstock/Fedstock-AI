@@ -16,6 +16,7 @@ class FedStockClient(fl.client.NumPyClient):
         hidden_size=32,
         epsilon=1.0,
         learning_rate=0.001,
+        y_scaler=None,
     ):
         self.cid = cid
         self.train_loader = train_loader
@@ -24,6 +25,7 @@ class FedStockClient(fl.client.NumPyClient):
         self.y_train = y_train
         self.epsilon = epsilon
         self.learning_rate = learning_rate
+        self.y_scaler = y_scaler
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = LightweightLSTM(input_size=input_size, hidden_size=hidden_size).to(self.device)
@@ -86,6 +88,10 @@ class FedStockClient(fl.client.NumPyClient):
         import numpy as np
         y_true = np.concatenate(y_true_list)
         y_pred = np.concatenate(y_pred_list)
+        
+        if self.y_scaler is not None:
+            y_true = self.y_scaler.inverse_transform(y_true.reshape(-1, 1)).flatten()
+            y_pred = self.y_scaler.inverse_transform(y_pred.reshape(-1, 1)).flatten()
         
         rmse = np.sqrt(np.mean((y_true - y_pred)**2))
         smape = 100 * np.mean(2 * np.abs(y_pred - y_true) / (np.abs(y_true) + np.abs(y_pred) + 1e-8))

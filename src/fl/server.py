@@ -59,7 +59,11 @@ class BubbleServer:
             noisy_importances.append(noisy_imp)
             
         noisy_importances = np.array(noisy_importances)
-        labels, k_star, multi_bubbles, single_bubbles = perform_clustering(noisy_importances)
+        labels, k_star, multi_bubbles, single_bubbles = perform_clustering(
+            noisy_importances,
+            max_clusters=15,
+            complexity_penalty=0.001
+        )
         
         print(f"Optimal Clusters (k*): {k_star}")
         

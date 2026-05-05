@@ -1,38 +1,58 @@
 import os
 import torch
+import numpy as np
+from sklearn.preprocessing import StandardScaler
 from torch.utils.data import TensorDataset, DataLoader
 
 from src.dataset import load_client_data
 from src.fl.client import FedStockClient
 from src.fl.server import BubbleServer
 
-def setup_client(client_id, data_dir, seq_len=1):
+def create_sequences(X, y, seq_len):
+    xs, ys = [], []
+    if len(X) <= seq_len:
+        return np.array(xs), np.array(ys)
+    for i in range(len(X) - seq_len):
+        xs.append(X[i:(i + seq_len)])
+        ys.append(y[i + seq_len])
+    return np.array(xs), np.array(ys)
+
+def setup_client(client_id, data_dir, seq_len=14):
     """
     Load real data for a client, split into train/val, and initialize FedStockClient.
     """
     print(f"Loading data for {client_id}...")
     X_scaled, y_raw, scaler = load_client_data(client_id, data_dir=data_dir)
     
-    # Split into Train (80%) and Val (20%)
-    split_idx = int(len(X_scaled) * 0.8)
+    # Scale Target (y_raw)
+    y_scaler = StandardScaler()
+    y_scaled = y_scaler.fit_transform(y_raw.reshape(-1, 1)).flatten()
     
-    # Fast test: Use subset if dataset is too large (e.g. 5M rows -> 100k rows)
-    max_samples = 100000 
+    # Fast test: Use subset if dataset is too large
+    max_samples = 10000 
     if len(X_scaled) > max_samples:
         X_scaled = X_scaled[-max_samples:]
-        y_raw = y_raw[-max_samples:]
-        split_idx = int(len(X_scaled) * 0.8)
+        y_scaled = y_scaled[-max_samples:]
         
-    X_train, y_train = X_scaled[:split_idx], y_raw[:split_idx]
-    X_val, y_val = X_scaled[split_idx:], y_raw[split_idx:]
+    split_idx = int(len(X_scaled) * 0.8)
+    
+    X_train, y_train = X_scaled[:split_idx], y_scaled[:split_idx]
+    X_val, y_val = X_scaled[split_idx:], y_scaled[split_idx:]
+    
+    # Apply Sliding Window
+    X_train_seq, y_train_seq = create_sequences(X_train, y_train, seq_len)
+    X_val_seq, y_val_seq = create_sequences(X_val, y_val, seq_len)
     
     # Create DataLoaders
-    # Note: X needs to be (batch, seq_len, features) for LSTM. 
-    # Current X_scaled is (samples, features). We add seq_len=1 dimension.
-    X_train_tensor = torch.tensor(X_train, dtype=torch.float32).unsqueeze(1)
-    y_train_tensor = torch.tensor(y_train, dtype=torch.float32).unsqueeze(1)
-    X_val_tensor = torch.tensor(X_val, dtype=torch.float32).unsqueeze(1)
-    y_val_tensor = torch.tensor(y_val, dtype=torch.float32).unsqueeze(1)
+    if len(X_train_seq) == 0:
+        # Fallback if extremely small dataset
+        X_train_seq, y_train_seq = np.zeros((1, seq_len, X_train.shape[1])), np.zeros((1,))
+        X_val_seq, y_val_seq = np.zeros((1, seq_len, X_val.shape[1])), np.zeros((1,))
+        
+    X_train_tensor = torch.tensor(X_train_seq, dtype=torch.float32)
+    y_train_tensor = torch.tensor(y_train_seq, dtype=torch.float32).unsqueeze(-1)
+    X_val_tensor = torch.tensor(X_val_seq, dtype=torch.float32)
+    y_val_tensor = torch.tensor(y_val_seq, dtype=torch.float32).unsqueeze(-1)
     
     train_loader = DataLoader(TensorDataset(X_train_tensor, y_train_tensor), batch_size=256, shuffle=True)
     val_loader = DataLoader(TensorDataset(X_val_tensor, y_val_tensor), batch_size=256, shuffle=False)
@@ -44,23 +64,31 @@ def setup_client(client_id, data_dir, seq_len=1):
         cid=client_id,
         train_loader=train_loader,
         val_loader=val_loader,
-        X_train=X_train_tensor.numpy(),
-        y_train=y_train_tensor.numpy(),
+        X_train=X_train_seq,
+        y_train=y_train_seq,
         input_size=input_size,
         hidden_size=32,
-        epsilon=1.0
+        epsilon=1.0,
+        y_scaler=y_scaler
     )
     return client
 
 def main():
     print("=== Starting PA-CFL Real Data Execution ===")
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    data_dir = os.path.join(current_dir, "src", "fedstock_data", "outputs", "clients")
-    clustering_json = os.path.join(current_dir, "outputs", "clustering_results.json")
+    data_dir = os.path.join(current_dir, "src", "2", "clients")
+    clustering_json = os.path.join(current_dir, "outputs", "clustering_results_2.json")
     
     # 1. Initialize Clients
-    # Using the 10 clients from the dataset
-    client_ids = ["CA_1", "CA_2", "CA_3", "CA_4", "TX_1", "TX_2", "TX_3", "WI_1", "WI_2", "WI_3"]
+    # Dynamically find clients from the dataset '2' directory
+    client_ids = []
+    if os.path.exists(data_dir):
+        for f in os.listdir(data_dir):
+            if os.path.isdir(os.path.join(data_dir, f)):
+                client_ids.append(f)
+    client_ids.sort()
+    
+    print(f"Found {len(client_ids)} clients in dataset 2.")
     clients_dict = {}
     
     for cid in client_ids:
