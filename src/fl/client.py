@@ -14,7 +14,7 @@ class FedStockClient(fl.client.NumPyClient):
         y_train,
         input_size,
         hidden_size=32,
-        epsilon=1.0,
+        epsilon=10.0,
         learning_rate=0.001,
         y_scaler=None,
     ):

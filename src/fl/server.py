@@ -62,7 +62,8 @@ class BubbleServer:
         labels, k_star, multi_bubbles, single_bubbles = perform_clustering(
             noisy_importances,
             max_clusters=15,
-            complexity_penalty=0.001
+            complexity_penalty=0.001,
+            singleton_penalty=0.05,
         )
         
         print(f"Optimal Clusters (k*): {k_star}")

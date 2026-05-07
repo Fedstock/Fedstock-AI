@@ -128,8 +128,8 @@ def _merge_non_isolated_singletons(labels, dist_matrix, isolation_std_multiplier
 def perform_clustering(
     noisy_importances,
     max_clusters=None,
-    complexity_penalty=0.08,
-    singleton_penalty=0.25,
+    complexity_penalty=0.001,
+    singleton_penalty=0.05,
     isolation_std_multiplier=0.75,
 ):
     """

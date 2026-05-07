@@ -162,7 +162,7 @@ def default_experiments(max_samples):
             "batch_size": 512,
             "hidden_size": 48,
             "learning_rate": 0.003,
-            "epsilon": 1.0,
+            "epsilon": 10.0,
             "num_rounds": 4,
             "epochs_per_round": 2,
             "personalized_epochs": 4,

@@ -13,7 +13,7 @@ sys.path.append(project_root)
 from src.dataset import load_client_data
 from src.fl.privacy import get_noisy_feature_importance
 
-def extract_features_for_all_clients(clients, data_dir, output_file, max_samples=100000, epsilon=1.0):
+def extract_features_for_all_clients(clients, data_dir, output_file, max_samples=100000, epsilon=10.0):
     """
     각 클라이언트별로 데이터를 로드하여 XGBoost를 통해 피처 중요도를 추출하고,
     차등 정보 보호(Laplace Noise)가 적용된 중요도 벡터를 JSON 형태로 저장합니다.
@@ -71,4 +71,4 @@ if __name__ == "__main__":
     OUTPUT_FILE = os.path.join(project_root, "outputs/feature_importances.json")
     
     # 모듈 실행 (속도와 성능의 균형을 위해 max_samples=50000 권장)
-    extract_features_for_all_clients(CLIENTS, DATA_DIR, OUTPUT_FILE, max_samples=50000, epsilon=1.0)
+    extract_features_for_all_clients(CLIENTS, DATA_DIR, OUTPUT_FILE, max_samples=50000, epsilon=10.0)

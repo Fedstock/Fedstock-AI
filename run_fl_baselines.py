@@ -71,7 +71,7 @@ def setup_client(client_id, data_dir, seq_len=14):
         y_train=y_train_seq,
         input_size=input_size,
         hidden_size=32,
-        epsilon=1.0,
+        epsilon=10.0,
         y_scaler=y_scaler
     )
     return client
