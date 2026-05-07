@@ -76,19 +76,23 @@ def setup_client(client_id, data_dir, seq_len=14):
 def main():
     print("=== Starting PA-CFL Real Data Execution ===")
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    data_dir = os.path.join(current_dir, "src", "2", "clients")
-    clustering_json = os.path.join(current_dir, "outputs", "clustering_results_2.json")
+    data_dir = os.path.join(current_dir, "src", "fedstock_data", "data", "clients")
+    clustering_json = os.path.join(current_dir, "outputs", "clustering_results.json")
     
     # 1. Initialize Clients
-    # Dynamically find clients from the dataset '2' directory
+    # Dynamically find clients from the dataset directory (.db files)
     client_ids = []
     if os.path.exists(data_dir):
         for f in os.listdir(data_dir):
-            if os.path.isdir(os.path.join(data_dir, f)):
-                client_ids.append(f)
+            if f.startswith("client_") and f.endswith(".db"):
+                cid = f.replace("client_", "").replace(".db", "")
+                client_ids.append(cid)
     client_ids.sort()
     
-    print(f"Found {len(client_ids)} clients in dataset 2.")
+    # For quick testing, we might limit the number of clients
+    client_ids = client_ids[:20]  # Just use 20 clients for faster evaluation
+    
+    print(f"Found {len(client_ids)} clients in dataset.")
     clients_dict = {}
     
     for cid in client_ids:

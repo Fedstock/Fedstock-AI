@@ -17,7 +17,7 @@ class FedStockDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-def load_client_data(client_id, data_dir="src/fedstock_data/outputs/clients", sequence_length=1):
+def load_client_data(client_id, data_dir="src/4/data/clients", sequence_length=1):
     """
     특정 클라이언트의 데이터를 로드하고 Data Leakage 방지를 위해 전처리를 수행합니다.
     """
@@ -58,13 +58,8 @@ def load_client_data(client_id, data_dir="src/fedstock_data/outputs/clients", se
         # 1. 정렬: 시계열 처리를 위해 item_id와 date 기준으로 정렬
         df = df.sort_values(by=['item_id', 'date']).reset_index(drop=True)
     
-    # 2. Data Leakage 방지: rolling feature들을 .shift(1) 처리 (item_id 그룹별로 수행하여 아이템 간 누수 방지)
-    rolling_cols = ['rolling_mean_7', 'rolling_std_7', 'rolling_mean_28', 'rolling_std_28']
-    
-    # 아이템별로 shift 적용
-    df[rolling_cols] = df.groupby('item_id')[rolling_cols].shift(1)
-    
-    # shift로 인해 발생한 결측치(각 아이템의 첫 번째 행) 제거
+    # Data Leakage 방지를 위한 .shift(1)은 데이터셋 생성 단계(src/4)에서 이미 처리됨
+    # 결측치(각 아이템의 첫 번째 행 등) 제거
     df = df.dropna().reset_index(drop=True)
     
     # 3. 특성과 타겟 분리
@@ -72,9 +67,12 @@ def load_client_data(client_id, data_dir="src/fedstock_data/outputs/clients", se
     feature_cols = [
         'dayofweek', 'month', 'is_weekend', 'is_holiday',
         'lag_7', 'lag_14', 'lag_28',
-        'rolling_mean_7', 'rolling_std_7', 'rolling_mean_28', 'rolling_std_28'
+        'rolling_mean_7', 'rolling_std_7', 'rolling_mean_28', 'rolling_std_28',
+        'price_change_rate', 'sell_price', 'week_of_year', 'is_month_start', 'is_month_end'
     ]
-    target_col = 'quantity'
+    
+    # 데이터셋에 포함된 target_7d가 있으면 사용, 없으면 quantity(당일 수요) 사용
+    target_col = 'target_7d' if 'target_7d' in df.columns else 'quantity'
     
     X_raw = df[feature_cols].values
     y_raw = df[target_col].values
@@ -91,7 +89,7 @@ def load_client_data(client_id, data_dir="src/fedstock_data/outputs/clients", se
         
     return X_scaled, y_raw, scaler
 
-def get_dataloader(client_id, batch_size=64, shuffle=True, data_dir="src/fedstock_data/outputs/clients"):
+def get_dataloader(client_id, batch_size=64, shuffle=True, data_dir="src/fedstock_data/data/clients"):
     """
     PyTorch DataLoader를 반환합니다.
     """
@@ -104,9 +102,9 @@ def get_dataloader(client_id, batch_size=64, shuffle=True, data_dir="src/fedstoc
 
 if __name__ == "__main__":
     # 간단한 테스트 코드
-    print("Testing data loader for CA_1...")
+    print("Testing data loader for CA_1_HOBBIES_1...")
     # 경로 조정: 현재 실행 위치가 workspace root라고 가정
-    dl, scaler = get_dataloader("CA_1", data_dir="src/fedstock_data/outputs/clients")
+    dl, scaler = get_dataloader("CA_1_HOBBIES_1", data_dir="src/fedstock_data/data/clients")
     print(f"Total batches: {len(dl)}")
     for X_batch, y_batch in dl:
         print(f"X_batch shape: {X_batch.shape}")
