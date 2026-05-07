@@ -232,15 +232,12 @@ def run_server_clustering(feature_importances, output_path, config, logger):
     return output, clusters
 
 
-def fit_global_scaler(data_dir, feature_cols, logger):
+def fit_client_scaler(data_dir, client_id, feature_cols, logger):
     scaler = StandardScaler()
-    total_rows = 0
-    for client_id in CLIENT_IDS:
-        train_path = data_dir / client_id / "train.csv"
-        df = clean_frame(pd.read_csv(train_path, usecols=feature_cols))
-        scaler.partial_fit(df.to_numpy(dtype=np.float32))
-        total_rows += len(df)
-    logger.info("Global scaler fitted on train.csv only: rows=%d clients=%d", total_rows, len(CLIENT_IDS))
+    train_path = data_dir / client_id / "train.csv"
+    df = clean_frame(pd.read_csv(train_path, usecols=feature_cols))
+    scaler.fit(df.to_numpy(dtype=np.float32))
+    logger.info("Client-specific scaler fitted on train.csv only: client=%s rows=%d", client_id, len(df))
     return scaler
 
 
@@ -304,9 +301,9 @@ def prepare_client_data(data_dir, client_id, scaler, feature_cols, config):
 
 
 def prepare_all_clients(data_dir, feature_cols, config, logger):
-    scaler = fit_global_scaler(data_dir, feature_cols, logger)
     clients = {}
     for client_id in CLIENT_IDS:
+        scaler = fit_client_scaler(data_dir, client_id, feature_cols, logger)
         clients[client_id] = prepare_client_data(data_dir, client_id, scaler, feature_cols, config)
         logger.info(
             "%s prepared sequences train=%d valid=%d test=%d seq_len=%d",
@@ -618,7 +615,7 @@ def main():
         "candidate_feature_cols": CANDIDATE_FEATURE_COLS,
         "target_col": TARGET_COL,
         "server_clustering_source": "train.csv only",
-        "scaler": "global StandardScaler fitted on all clients' train.csv only",
+        "scaler": "client-specific StandardScaler fitted on each client's train.csv only",
         "corr_threshold": args.corr_threshold,
         "anova_top_k": args.anova_top_k,
         "feature_selection_max_samples_per_client": args.feature_selection_max_samples_per_client or None,
