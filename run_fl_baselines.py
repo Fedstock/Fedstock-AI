@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import copy
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler
 from torch.utils.data import TensorDataset, DataLoader
 
 from src.dataset import load_client_data
@@ -27,20 +27,21 @@ def setup_client(client_id, data_dir, seq_len=14):
     print(f"Loading data for {client_id}...")
     X_scaled, y_raw, scaler = load_client_data(client_id, data_dir=data_dir)
     
-    # Scale Target (y_raw)
-    y_scaler = StandardScaler()
-    y_scaled = y_scaler.fit_transform(y_raw.reshape(-1, 1)).flatten()
-    
     # Use subset for faster evaluation but large enough
     max_samples = 5000 
     if len(X_scaled) > max_samples:
         X_scaled = X_scaled[-max_samples:]
-        y_scaled = y_scaled[-max_samples:]
+        y_raw = y_raw[-max_samples:]
         
     split_idx = int(len(X_scaled) * 0.8)
     
-    X_train, y_train = X_scaled[:split_idx], y_scaled[:split_idx]
-    X_val, y_val = X_scaled[split_idx:], y_scaled[split_idx:]
+    X_train, y_train_raw = X_scaled[:split_idx], y_raw[:split_idx]
+    X_val, y_val_raw = X_scaled[split_idx:], y_raw[split_idx:]
+
+    # Fit the target scaler on train only to reduce outlier impact without leaking validation targets.
+    y_scaler = RobustScaler()
+    y_train = y_scaler.fit_transform(y_train_raw.reshape(-1, 1)).flatten()
+    y_val = y_scaler.transform(y_val_raw.reshape(-1, 1)).flatten()
     
     # Apply Sliding Window
     X_train_seq, y_train_seq = create_sequences(X_train, y_train, seq_len)

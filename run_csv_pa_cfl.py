@@ -12,9 +12,11 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from sklearn.feature_selection import f_regression
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler, StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 from xgboost import XGBRegressor
+
+from losses import HuberSMAPELoss
 
 
 CLIENT_IDS = ("CA_1", "CA_2", "CA_3", "CA_4", "TX_1", "TX_2", "TX_3", "WI_1", "WI_2", "WI_3")
@@ -232,16 +234,22 @@ def run_server_clustering(feature_importances, output_path, config, logger):
     return output, clusters
 
 
-def fit_client_scaler(data_dir, client_id, feature_cols, logger):
-    scaler = StandardScaler()
+def fit_client_scalers(data_dir, client_id, feature_cols, logger):
+    feature_scaler = StandardScaler()
+    target_scaler = RobustScaler()
     train_path = data_dir / client_id / "train.csv"
-    df = clean_frame(pd.read_csv(train_path, usecols=feature_cols))
-    scaler.fit(df.to_numpy(dtype=np.float32))
-    logger.info("Client-specific scaler fitted on train.csv only: client=%s rows=%d", client_id, len(df))
-    return scaler
+    df = clean_frame(pd.read_csv(train_path, usecols=feature_cols + [TARGET_COL]))
+    feature_scaler.fit(df[feature_cols].to_numpy(dtype=np.float32))
+    target_scaler.fit(df[[TARGET_COL]].to_numpy(dtype=np.float32))
+    logger.info(
+        "Client-specific scalers fitted on train.csv only: client=%s rows=%d feature=StandardScaler target=RobustScaler",
+        client_id,
+        len(df),
+    )
+    return feature_scaler, target_scaler
 
 
-def make_sequences(context_df, eval_df, scaler, feature_cols, config):
+def make_sequences(context_df, eval_df, feature_scaler, target_scaler, feature_cols, config):
     seq_len = config["sequence_length"]
     context = context_df.copy()
     context["_is_eval"] = False
@@ -253,8 +261,8 @@ def make_sequences(context_df, eval_df, scaler, feature_cols, config):
     X_parts = []
     y_parts = []
     for _, group in combined.groupby("item_id", sort=False):
-        features = scaler.transform(group[feature_cols].to_numpy(dtype=np.float32)).astype(np.float32)
-        targets = group[TARGET_COL].to_numpy(dtype=np.float32)
+        features = feature_scaler.transform(group[feature_cols].to_numpy(dtype=np.float32)).astype(np.float32)
+        targets = target_scaler.transform(group[[TARGET_COL]].to_numpy(dtype=np.float32)).reshape(-1).astype(np.float32)
         eval_mask = group["_is_eval"].to_numpy(dtype=bool)
         eval_positions = np.flatnonzero(eval_mask)
         valid_positions = eval_positions[eval_positions >= seq_len - 1]
@@ -269,15 +277,15 @@ def make_sequences(context_df, eval_df, scaler, feature_cols, config):
     return np.concatenate(X_parts, axis=0), np.concatenate(y_parts, axis=0)
 
 
-def prepare_client_data(data_dir, client_id, scaler, feature_cols, config):
+def prepare_client_data(data_dir, client_id, feature_scaler, target_scaler, feature_cols, config):
     client_dir = data_dir / client_id
     train_df = load_split_csv(client_dir, "train", feature_cols)
     valid_df = load_split_csv(client_dir, "valid", feature_cols)
     test_df = load_split_csv(client_dir, "test", feature_cols)
 
-    X_train, y_train = make_sequences(pd.DataFrame(columns=train_df.columns), train_df, scaler, feature_cols, config)
-    X_valid, y_valid = make_sequences(train_df, valid_df, scaler, feature_cols, config)
-    X_test, y_test = make_sequences(pd.concat([train_df, valid_df], ignore_index=True), test_df, scaler, feature_cols, config)
+    X_train, y_train = make_sequences(pd.DataFrame(columns=train_df.columns), train_df, feature_scaler, target_scaler, feature_cols, config)
+    X_valid, y_valid = make_sequences(train_df, valid_df, feature_scaler, target_scaler, feature_cols, config)
+    X_test, y_test = make_sequences(pd.concat([train_df, valid_df], ignore_index=True), test_df, feature_scaler, target_scaler, feature_cols, config)
 
     if config["train_max_samples"] and len(y_train) > config["train_max_samples"]:
         rng = np.random.default_rng(config["seed"])
@@ -297,14 +305,16 @@ def prepare_client_data(data_dir, client_id, scaler, feature_cols, config):
         "train_samples": len(y_train),
         "valid_samples": len(y_valid),
         "test_samples": len(y_test),
+        "feature_scaler": feature_scaler,
+        "target_scaler": target_scaler,
     }
 
 
 def prepare_all_clients(data_dir, feature_cols, config, logger):
     clients = {}
     for client_id in CLIENT_IDS:
-        scaler = fit_client_scaler(data_dir, client_id, feature_cols, logger)
-        clients[client_id] = prepare_client_data(data_dir, client_id, scaler, feature_cols, config)
+        feature_scaler, target_scaler = fit_client_scalers(data_dir, client_id, feature_cols, logger)
+        clients[client_id] = prepare_client_data(data_dir, client_id, feature_scaler, target_scaler, feature_cols, config)
         logger.info(
             "%s prepared sequences train=%d valid=%d test=%d seq_len=%d",
             client_id,
@@ -314,6 +324,20 @@ def prepare_all_clients(data_dir, feature_cols, config, logger):
             config["sequence_length"],
         )
     return clients
+
+
+def build_loss(target_scaler, config, device):
+    return HuberSMAPELoss(
+        target_scaler=target_scaler,
+        huber_delta=config["huber_delta"],
+        smape_weight=config["smape_loss_weight"],
+    ).to(device)
+
+
+def inverse_target(values, target_scaler):
+    if target_scaler is None:
+        return values
+    return target_scaler.inverse_transform(values.reshape(-1, 1)).reshape(-1)
 
 
 def train_one_epoch(model, loader, optimizer, criterion, device):
@@ -333,17 +357,17 @@ def train_one_epoch(model, loader, optimizer, criterion, device):
     return total_loss / max(total, 1)
 
 
-def evaluate(model, loader, device):
+def evaluate(model, loader, target_scaler, device):
     model.eval()
     preds = []
     targets = []
     with torch.no_grad():
         for X, y in loader:
             out = model(X.to(device)).cpu().numpy().reshape(-1)
-            preds.append(np.maximum(out, 0.0))
+            preds.append(out)
             targets.append(y.numpy().reshape(-1))
-    pred = np.concatenate(preds)
-    target = np.concatenate(targets)
+    pred = np.maximum(inverse_target(np.concatenate(preds), target_scaler), 0.0)
+    target = inverse_target(np.concatenate(targets), target_scaler)
     sse = float(np.sum((pred - target) ** 2))
     sum_y = float(np.sum(target))
     sum_y2 = float(np.sum(target**2))
@@ -396,7 +420,6 @@ def compact_metrics(row):
 
 
 def train_fedavg_group(label, members, clients, feature_cols, config, device, logger, stage):
-    criterion = nn.MSELoss()
     global_model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
     history = []
     for round_idx in range(1, config["num_rounds"] + 1):
@@ -405,6 +428,7 @@ def train_fedavg_group(label, members, clients, feature_cols, config, device, lo
         for client_id in members:
             local_model = copy.deepcopy(global_model).to(device)
             optimizer = torch.optim.Adam(local_model.parameters(), lr=config["learning_rate"])
+            criterion = build_loss(clients[client_id]["target_scaler"], config, device)
             for _ in range(config["epochs_per_round"]):
                 train_one_epoch(local_model, clients[client_id]["train_loader"], optimizer, criterion, device)
             local_states.append({k: v.detach().cpu().clone() for k, v in local_model.state_dict().items()})
@@ -413,7 +437,7 @@ def train_fedavg_group(label, members, clients, feature_cols, config, device, lo
 
         val_rows = []
         for client_id in members:
-            row = evaluate(global_model, clients[client_id]["valid_loader"], device)
+            row = evaluate(global_model, clients[client_id]["valid_loader"], clients[client_id]["target_scaler"], device)
             row.update({"client_id": client_id, "cluster": int(label), "round": round_idx, "stage": stage})
             val_rows.append(row)
         summary = aggregate_metrics(val_rows)
@@ -433,16 +457,16 @@ def train_fedavg_group(label, members, clients, feature_cols, config, device, lo
 
 
 def train_local_models(clients, feature_cols, config, device, logger):
-    criterion = nn.MSELoss()
     final_models = {}
     history = []
     total_epochs = config["num_rounds"] * config["epochs_per_round"]
     for client_id in CLIENT_IDS:
         model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=config["learning_rate"])
+        criterion = build_loss(clients[client_id]["target_scaler"], config, device)
         for epoch in range(1, total_epochs + 1):
             train_one_epoch(model, clients[client_id]["train_loader"], optimizer, criterion, device)
-            row = evaluate(model, clients[client_id]["valid_loader"], device)
+            row = evaluate(model, clients[client_id]["valid_loader"], clients[client_id]["target_scaler"], device)
             row.update({"client_id": client_id, "cluster": -1, "round": epoch, "stage": "local_valid"})
             history.append(row)
         final_models[client_id] = model
@@ -467,14 +491,14 @@ def train_pa_cfl(clients, clusters, isolated_clients, feature_cols, config, devi
         final_models.update(models)
         history.extend(rows)
 
-    criterion = nn.MSELoss()
     for client_id in isolated_clients:
         logger.info("[PA-CFL Personalized] client=%s", client_id)
         model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=config["learning_rate"])
+        criterion = build_loss(clients[client_id]["target_scaler"], config, device)
         for epoch in range(1, config["personalized_epochs"] + 1):
             train_one_epoch(model, clients[client_id]["train_loader"], optimizer, criterion, device)
-            row = evaluate(model, clients[client_id]["valid_loader"], device)
+            row = evaluate(model, clients[client_id]["valid_loader"], clients[client_id]["target_scaler"], device)
             row.update({"client_id": client_id, "cluster": int(next(k for k, v in clusters.items() if client_id in v)), "round": epoch, "stage": "pa_cfl_personalized_valid"})
             history.append(row)
         final_models[client_id] = model
@@ -484,7 +508,7 @@ def train_pa_cfl(clients, clusters, isolated_clients, feature_cols, config, devi
 def evaluate_test_models(models, clients, clusters, device, logger, method):
     rows = []
     for client_id in CLIENT_IDS:
-        row = evaluate(models[client_id], clients[client_id]["test_loader"], device)
+        row = evaluate(models[client_id], clients[client_id]["test_loader"], clients[client_id]["target_scaler"], device)
         cluster = int(next((k for k, v in clusters.items() if client_id in v), -1))
         row.update({"client_id": client_id, "cluster": cluster, "method": method})
         rows.append(row)
@@ -582,6 +606,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--hidden-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=0.003)
+    parser.add_argument("--huber-delta", type=float, default=1.0)
+    parser.add_argument("--smape-loss-weight", type=float, default=0.1)
     parser.add_argument("--sequence-length", type=int, default=28)
     parser.add_argument("--max-clusters", type=int, default=5)
     parser.add_argument("--corr-threshold", type=float, default=0.95)
@@ -611,11 +637,15 @@ def main():
         "batch_size": args.batch_size,
         "hidden_size": args.hidden_size,
         "learning_rate": args.learning_rate,
+        "huber_delta": args.huber_delta,
+        "smape_loss_weight": args.smape_loss_weight,
         "sequence_length": args.sequence_length,
         "candidate_feature_cols": CANDIDATE_FEATURE_COLS,
         "target_col": TARGET_COL,
         "server_clustering_source": "train.csv only",
-        "scaler": "client-specific StandardScaler fitted on each client's train.csv only",
+        "feature_scaler": "client-specific StandardScaler fitted on each client's train.csv only",
+        "target_scaler": "client-specific RobustScaler fitted on each client's train.csv only",
+        "loss": "HuberSMAPELoss: Huber on RobustScaler-transformed targets plus SMAPE term on original target scale",
         "corr_threshold": args.corr_threshold,
         "anova_top_k": args.anova_top_k,
         "feature_selection_max_samples_per_client": args.feature_selection_max_samples_per_client or None,

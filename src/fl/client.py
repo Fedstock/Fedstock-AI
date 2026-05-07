@@ -1,6 +1,7 @@
 import flwr as fl
 import torch
 from collections import OrderedDict
+from losses import HuberSMAPELoss
 from src.models.lstm import LightweightLSTM
 from src.fl.privacy import get_noisy_feature_importance
 
@@ -29,7 +30,7 @@ class FedStockClient(fl.client.NumPyClient):
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = LightweightLSTM(input_size=input_size, hidden_size=hidden_size).to(self.device)
-        self.criterion = torch.nn.MSELoss()
+        self.criterion = HuberSMAPELoss(target_scaler=y_scaler).to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
 
     def get_parameters(self, config):
