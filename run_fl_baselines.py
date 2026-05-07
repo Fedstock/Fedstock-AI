@@ -150,11 +150,15 @@ def main():
         num_rounds=num_rounds,
         epochs_per_round=epochs_per_round,
         global_warmup_rounds=1,
+        head_finetune_epochs=1,
+        personalize_head=True,
     )
     pacfl_pers_history = pacfl_server.step_4_personalized_learning(epochs=num_rounds * epochs_per_round)
     
-    # Aggregate last round metrics for bubbles and personalized
-    pacfl_final_metrics = [h for h in pacfl_fed_history if h["round"] == num_rounds] + pacfl_pers_history
+    # Prefer personalized head metrics when available; otherwise use last shared-LSTM round.
+    pacfl_head_metrics = [h for h in pacfl_fed_history if h["stage"] == "head_finetune"]
+    pacfl_bubble_metrics = pacfl_head_metrics or [h for h in pacfl_fed_history if h["round"] == num_rounds]
+    pacfl_final_metrics = pacfl_bubble_metrics + pacfl_pers_history
     pacfl_rmse, pacfl_smape = aggregate_metrics(pacfl_final_metrics)
     results["PA-CFL"] = {"rmse": pacfl_rmse, "smape": pacfl_smape}
     print(f"[PA-CFL] RMSE: {pacfl_rmse:.4f}, SMAPE: {pacfl_smape:.4f}")

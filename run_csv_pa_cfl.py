@@ -40,6 +40,8 @@ CANDIDATE_FEATURE_COLS = [
 ]
 TARGET_COL = "target_1d"
 INDEX_COLS = ["item_id", "date"]
+COMMON_LAYER_PREFIXES = ("lstm.",)
+HEAD_LAYER_PREFIXES = ("fc.",)
 
 
 def set_seed(seed):
@@ -423,6 +425,43 @@ def clone_model_state(model):
     return {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
 
 
+def clone_state_subset(model, prefixes):
+    return {
+        key: value.detach().cpu().clone()
+        for key, value in model.state_dict().items()
+        if key.startswith(prefixes)
+    }
+
+
+def load_state_subset(model, partial_state):
+    state = model.state_dict()
+    for key, value in partial_state.items():
+        state[key] = value.to(state[key].device)
+    model.load_state_dict(state)
+
+
+def set_trainable_layers(model, trainable_prefixes):
+    for name, parameter in model.named_parameters():
+        parameter.requires_grad = name.startswith(trainable_prefixes)
+
+
+def reset_trainable_layers(model):
+    for parameter in model.parameters():
+        parameter.requires_grad = True
+
+
+def make_optimizer(model, learning_rate):
+    return torch.optim.Adam((param for param in model.parameters() if param.requires_grad), lr=learning_rate)
+
+
+def train_head_only(model, loader, criterion, config, device):
+    set_trainable_layers(model, HEAD_LAYER_PREFIXES)
+    optimizer = make_optimizer(model, config["learning_rate"])
+    for _ in range(config["head_finetune_epochs"]):
+        train_one_epoch(model, loader, optimizer, criterion, device)
+    reset_trainable_layers(model)
+
+
 def train_pa_cfl_shared_global_model(clients, feature_cols, config, device, logger):
     global_model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
     warmup_rounds = config["pa_cfl_global_warmup_rounds"]
@@ -488,6 +527,79 @@ def train_fedavg_group(label, members, clients, feature_cols, config, device, lo
     return {client_id: global_model for client_id in members}, history
 
 
+def train_personalized_head_group(label, members, clients, feature_cols, config, device, logger, stage, initial_state):
+    global_model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
+    global_model.load_state_dict(initial_state)
+    client_models = {}
+    for client_id in members:
+        model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
+        model.load_state_dict(initial_state)
+        client_models[client_id] = model
+
+    history = []
+    for round_idx in range(1, config["num_rounds"] + 1):
+        local_common_states = []
+        weights = []
+        shared_common_state = clone_state_subset(global_model, COMMON_LAYER_PREFIXES)
+        for client_id in members:
+            local_model = client_models[client_id]
+            load_state_subset(local_model, shared_common_state)
+            reset_trainable_layers(local_model)
+            optimizer = make_optimizer(local_model, config["learning_rate"])
+            criterion = build_loss(clients[client_id]["target_scaler"], config, device)
+            for _ in range(config["epochs_per_round"]):
+                train_one_epoch(local_model, clients[client_id]["train_loader"], optimizer, criterion, device)
+            local_common_states.append(clone_state_subset(local_model, COMMON_LAYER_PREFIXES))
+            weights.append(clients[client_id]["train_samples"])
+
+        averaged_common_state = average_state_dicts(local_common_states, weights)
+        load_state_subset(global_model, averaged_common_state)
+
+        val_rows = []
+        for client_id in members:
+            load_state_subset(client_models[client_id], averaged_common_state)
+            row = evaluate(client_models[client_id], clients[client_id]["valid_loader"], clients[client_id]["target_scaler"], device)
+            row.update({"client_id": client_id, "cluster": int(label), "round": round_idx, "stage": stage})
+            val_rows.append(row)
+        summary = aggregate_metrics(val_rows)
+        logger.info(
+            "[%s %s] round %d/%d valid RMSE=%.4f MAE=%.4f R2=%.4f SMAPE=%.4f",
+            stage,
+            label,
+            round_idx,
+            config["num_rounds"],
+            summary["rmse"],
+            summary["mae"],
+            summary["r2"],
+            summary["smape"],
+        )
+        history.extend(val_rows)
+
+    final_common_state = clone_state_subset(global_model, COMMON_LAYER_PREFIXES)
+    if config["head_finetune_epochs"] > 0:
+        for client_id in members:
+            model = client_models[client_id]
+            load_state_subset(model, final_common_state)
+            criterion = build_loss(clients[client_id]["target_scaler"], config, device)
+            train_head_only(model, clients[client_id]["train_loader"], criterion, config, device)
+            row = evaluate(model, clients[client_id]["valid_loader"], clients[client_id]["target_scaler"], device)
+            row.update({"client_id": client_id, "cluster": int(label), "round": config["head_finetune_epochs"], "stage": f"{stage}_head_finetune"})
+            history.append(row)
+            logger.info(
+                "[%s Head %s] client=%s epochs=%d valid RMSE=%.4f MAE=%.4f R2=%.4f SMAPE=%.4f",
+                stage,
+                label,
+                client_id,
+                config["head_finetune_epochs"],
+                row["rmse"],
+                row["mae"],
+                row["r2"],
+                row["smape"],
+            )
+
+    return client_models, history
+
+
 def train_local_models(clients, feature_cols, config, device, logger):
     final_models = {}
     history = []
@@ -519,8 +631,8 @@ def train_pa_cfl(clients, clusters, isolated_clients, feature_cols, config, devi
     for label, members in sorted(clusters.items()):
         if len(members) == 1 and members[0] in isolated_set:
             continue
-        logger.info("[PA-CFL Bubble %s] FedAvg members=%s", label, members)
-        models, rows = train_fedavg_group(
+        logger.info("[PA-CFL Bubble %s] shared LSTM + personalized head members=%s", label, members)
+        models, rows = train_personalized_head_group(
             label,
             members,
             clients,
@@ -529,7 +641,7 @@ def train_pa_cfl(clients, clusters, isolated_clients, feature_cols, config, devi
             device,
             logger,
             "pa_cfl_valid",
-            initial_state=shared_initial_state,
+            shared_initial_state,
         )
         final_models.update(models)
         history.extend(rows)
@@ -538,13 +650,15 @@ def train_pa_cfl(clients, clusters, isolated_clients, feature_cols, config, devi
         logger.info("[PA-CFL Personalized] client=%s", client_id)
         model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
         model.load_state_dict(shared_initial_state)
-        optimizer = torch.optim.Adam(model.parameters(), lr=config["learning_rate"])
         criterion = build_loss(clients[client_id]["target_scaler"], config, device)
+        set_trainable_layers(model, HEAD_LAYER_PREFIXES)
+        optimizer = make_optimizer(model, config["learning_rate"])
         for epoch in range(1, config["personalized_epochs"] + 1):
             train_one_epoch(model, clients[client_id]["train_loader"], optimizer, criterion, device)
             row = evaluate(model, clients[client_id]["valid_loader"], clients[client_id]["target_scaler"], device)
             row.update({"client_id": client_id, "cluster": int(next(k for k, v in clusters.items() if client_id in v)), "round": epoch, "stage": "pa_cfl_personalized_valid"})
             history.append(row)
+        reset_trainable_layers(model)
         final_models[client_id] = model
     return final_models, history
 
@@ -648,6 +762,7 @@ def main():
     parser.add_argument("--epochs-per-round", type=int, default=1)
     parser.add_argument("--personalized-epochs", type=int, default=4)
     parser.add_argument("--pa-cfl-global-warmup-rounds", type=int, default=1)
+    parser.add_argument("--head-finetune-epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--hidden-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=0.003)
@@ -680,6 +795,7 @@ def main():
         "epochs_per_round": args.epochs_per_round,
         "personalized_epochs": args.personalized_epochs,
         "pa_cfl_global_warmup_rounds": args.pa_cfl_global_warmup_rounds,
+        "head_finetune_epochs": args.head_finetune_epochs,
         "batch_size": args.batch_size,
         "hidden_size": args.hidden_size,
         "learning_rate": args.learning_rate,
@@ -692,6 +808,7 @@ def main():
         "feature_scaler": "client-specific StandardScaler fitted on each client's train.csv only",
         "target_scaler": "client-specific RobustScaler fitted on each client's train.csv only",
         "loss": "HuberSMAPELoss: Huber on RobustScaler-transformed targets plus SMAPE term on original target scale",
+        "pa_cfl_personalization": "bubble-level FedAvg shares only LSTM parameters; each client keeps and fine-tunes an independent fc head",
         "corr_threshold": args.corr_threshold,
         "anova_top_k": args.anova_top_k,
         "feature_selection_max_samples_per_client": args.feature_selection_max_samples_per_client or None,

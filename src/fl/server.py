@@ -20,6 +20,7 @@ class BubbleServer:
         self.bubbles = []
         self.isolated = []
         self.shared_global_weights = None
+        self.shared_lstm_weights = None
 
     @staticmethod
     def _copy_parameters(parameters):
@@ -126,7 +127,15 @@ class BubbleServer:
         print(f"Multi-Client Bubbles: {self.bubbles}")
         print(f"Isolated (Single-Client) Bubbles: {self.isolated}")
         
-    def step_3_federated_learning(self, num_rounds=3, epochs_per_round=5, logger=None, global_warmup_rounds=0):
+    def step_3_federated_learning(
+        self,
+        num_rounds=3,
+        epochs_per_round=5,
+        logger=None,
+        global_warmup_rounds=0,
+        head_finetune_epochs=1,
+        personalize_head=False,
+    ):
         """
         Performs FedAvg within each multi-client bubble.
         """
@@ -137,12 +146,21 @@ class BubbleServer:
             epochs_per_round=epochs_per_round,
             logger=logger,
         )
+        first_client = next(iter(self.clients.values()), None)
+        self.shared_lstm_weights = (
+            first_client.select_parameters(self.shared_global_weights, ("lstm.",))
+            if personalize_head and first_client is not None
+            else None
+        )
 
         for b_idx, bubble_cids in enumerate(self.bubbles):
             _emit(f"\n[Bubble {b_idx}] Starting FL with clients: {bubble_cids}", logger)
 
-            # Every bubble starts from the same shared global model.
-            global_weights = self._copy_parameters(self.shared_global_weights)
+            if personalize_head:
+                # Every bubble shares the same LSTM backbone; each client keeps its own output head.
+                global_weights = self._copy_parameters(self.shared_lstm_weights)
+            else:
+                global_weights = self._copy_parameters(self.shared_global_weights)
 
             for fl_round in range(1, num_rounds + 1):
                 _emit(f"  Round {fl_round}/{num_rounds}", logger)
@@ -153,11 +171,16 @@ class BubbleServer:
                 
                 for cid in bubble_cids:
                     client = self.clients[cid]
-                    # fit(parameters, config) -> returns updated_parameters, num_samples, metrics
-                    updated_weights, num_samples, _ = client.fit(
-                        parameters=global_weights, 
-                        config={"epochs": epochs_per_round}
-                    )
+                    if personalize_head:
+                        updated_weights, num_samples, _ = client.fit_shared_lstm(
+                            parameters=global_weights,
+                            config={"epochs": epochs_per_round}
+                        )
+                    else:
+                        updated_weights, num_samples, _ = client.fit(
+                            parameters=global_weights,
+                            config={"epochs": epochs_per_round}
+                        )
                     round_weights.append(updated_weights)
                     round_samples.append(num_samples)
                     
@@ -171,7 +194,10 @@ class BubbleServer:
                 
                 for cid in bubble_cids:
                     client = self.clients[cid]
-                    _, _, metrics = client.evaluate(parameters=global_weights, config={})
+                    if personalize_head:
+                        _, _, metrics = client.evaluate_shared_lstm(parameters=global_weights, config={})
+                    else:
+                        _, _, metrics = client.evaluate(parameters=global_weights, config={})
                     total_rmse += metrics["rmse"] * round_samples[bubble_cids.index(cid)]
                     total_smape += metrics["smape"] * round_samples[bubble_cids.index(cid)]
                     
@@ -192,7 +218,31 @@ class BubbleServer:
                     f"    -> Bubble {b_idx} Global metrics: RMSE={avg_rmse:.4f}, SMAPE={avg_smape:.4f}",
                     logger,
                 )
-                
+
+            if personalize_head and head_finetune_epochs > 0:
+                for cid in bubble_cids:
+                    client = self.clients[cid]
+                    updated_weights, num_samples, _ = client.fit_head(
+                        parameters=global_weights,
+                        config={"epochs": head_finetune_epochs},
+                    )
+                    _, _, metrics = client.evaluate(parameters=updated_weights, config={})
+                    history.append(
+                        {
+                            "stage": "head_finetune",
+                            "bubble": b_idx,
+                            "client": cid,
+                            "epochs": head_finetune_epochs,
+                            "num_samples": int(num_samples),
+                            "rmse": metrics["rmse"],
+                            "smape": metrics["smape"],
+                        }
+                    )
+                    _emit(
+                        f"    -> Client {cid} personalized head metrics: RMSE={metrics['rmse']:.4f}, SMAPE={metrics['smape']:.4f}",
+                        logger,
+                    )
+
         _emit("\nFL Training Complete.", logger)
         return history
 
@@ -212,20 +262,21 @@ class BubbleServer:
             _emit(f"\n[Personalized] Starting local training for client: {cid}", logger)
             client = self.clients[cid]
             
-            # Start isolated bubbles from the same shared global model used by multi-client bubbles.
-            if self.shared_global_weights is None:
+            # Start isolated bubbles from the same shared LSTM and fine-tune only the local head.
+            if self.shared_lstm_weights is None:
                 current_weights = client.get_parameters({})
+                updated_weights, num_samples, _ = client.fit(
+                    parameters=current_weights,
+                    config={"epochs": epochs}
+                )
+                _, _, metrics = client.evaluate(parameters=updated_weights, config={})
             else:
-                current_weights = self._copy_parameters(self.shared_global_weights)
-            
-            # Train locally
-            updated_weights, num_samples, _ = client.fit(
-                parameters=current_weights, 
-                config={"epochs": epochs}
-            )
-            
-            # Evaluate
-            _, _, metrics = client.evaluate(parameters=updated_weights, config={})
+                current_weights = self._copy_parameters(self.shared_lstm_weights)
+                updated_weights, num_samples, _ = client.fit_head(
+                    parameters=current_weights,
+                    config={"epochs": epochs}
+                )
+                _, _, metrics = client.evaluate(parameters=updated_weights, config={})
             result = {
                 "stage": "personalized",
                 "client": cid,

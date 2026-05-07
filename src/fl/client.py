@@ -5,6 +5,10 @@ from losses import HuberSMAPELoss
 from src.models.lstm import LightweightLSTM
 from src.fl.privacy import get_noisy_feature_importance
 
+SHARED_LAYER_PREFIXES = ("lstm.",)
+HEAD_LAYER_PREFIXES = ("fc.",)
+
+
 class FedStockClient(fl.client.NumPyClient):
     def __init__(
         self,
@@ -31,11 +35,23 @@ class FedStockClient(fl.client.NumPyClient):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = LightweightLSTM(input_size=input_size, hidden_size=hidden_size).to(self.device)
         self.criterion = HuberSMAPELoss(target_scaler=y_scaler).to(self.device)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
 
     def get_parameters(self, config):
         # Extract weights from PyTorch model to numpy arrays
         return [val.cpu().numpy() for _, val in self.model.state_dict().items()]
+
+    def _parameter_keys(self):
+        return list(self.model.state_dict().keys())
+
+    def select_parameters(self, parameters, prefixes):
+        return [
+            value
+            for key, value in zip(self._parameter_keys(), parameters)
+            if key.startswith(prefixes)
+        ]
+
+    def get_shared_parameters(self):
+        return self.select_parameters(self.get_parameters({}), SHARED_LAYER_PREFIXES)
 
     def set_parameters(self, parameters):
         # Load weights from numpy arrays to PyTorch model
@@ -43,30 +59,78 @@ class FedStockClient(fl.client.NumPyClient):
         state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
         self.model.load_state_dict(state_dict, strict=True)
 
-    def fit(self, parameters, config):
-        # Apply weights from server
-        self.set_parameters(parameters)
-        
-        # Train locally
+    def set_shared_parameters(self, parameters):
+        state_dict = self.model.state_dict()
+        shared_keys = [key for key in state_dict if key.startswith(SHARED_LAYER_PREFIXES)]
+        for key, value in zip(shared_keys, parameters):
+            state_dict[key] = torch.tensor(value)
+        self.model.load_state_dict(state_dict, strict=True)
+
+    def _set_trainable_layers(self, prefixes):
+        for name, parameter in self.model.named_parameters():
+            parameter.requires_grad = name.startswith(prefixes)
+
+    def _reset_trainable_layers(self):
+        for parameter in self.model.parameters():
+            parameter.requires_grad = True
+
+    def _make_optimizer(self):
+        return torch.optim.Adam(
+            (param for param in self.model.parameters() if param.requires_grad),
+            lr=self.learning_rate,
+        )
+
+    def _train_epochs(self, epochs):
         self.model.train()
-        epochs = config.get("epochs", 5)
-        for epoch in range(epochs):
+        optimizer = self._make_optimizer()
+        for _ in range(epochs):
             for batch_X, batch_y in self.train_loader:
                 batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
-                
-                self.optimizer.zero_grad()
+
+                optimizer.zero_grad()
                 outputs = self.model(batch_X)
                 loss = self.criterion(outputs, batch_y)
                 loss.backward()
-                self.optimizer.step()
-                
+                optimizer.step()
+
+    def fit(self, parameters, config):
+        # Apply weights from server
+        self.set_parameters(parameters)
+        epochs = config.get("epochs", 5)
+        self._reset_trainable_layers()
+        self._train_epochs(epochs)
+
         # Return updated weights and number of samples
+        return self.get_parameters(config={}), len(self.train_loader.dataset), {}
+
+    def fit_shared_lstm(self, parameters, config):
+        # Apply shared LSTM weights while preserving this client's local output head.
+        self.set_shared_parameters(parameters)
+        epochs = config.get("epochs", 5)
+        self._reset_trainable_layers()
+        self._train_epochs(epochs)
+        return self.get_shared_parameters(), len(self.train_loader.dataset), {}
+
+    def fit_head(self, parameters, config):
+        # Fine-tune only the personalized output head on top of shared LSTM weights.
+        self.set_shared_parameters(parameters)
+        epochs = config.get("epochs", 1)
+        self._set_trainable_layers(HEAD_LAYER_PREFIXES)
+        self._train_epochs(epochs)
+        self._reset_trainable_layers()
         return self.get_parameters(config={}), len(self.train_loader.dataset), {}
 
     def evaluate(self, parameters, config):
         # Apply weights from server
         self.set_parameters(parameters)
-        
+        return self._evaluate_current()
+
+    def evaluate_shared_lstm(self, parameters, config):
+        # Evaluate with shared LSTM weights and this client's local output head.
+        self.set_shared_parameters(parameters)
+        return self._evaluate_current()
+
+    def _evaluate_current(self):
         # Evaluate locally
         self.model.eval()
         total_loss = 0.0
