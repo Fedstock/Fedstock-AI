@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 import numpy as np
 import copy
@@ -110,8 +110,8 @@ def main():
         clients_dict[cid] = setup_client(cid, data_dir)
         
     # Hyperparameters
-    num_rounds = 10
-    epochs_per_round = 2
+    num_rounds = 100
+    epochs_per_round = 5
     
     # We will evaluate 3 strategies
     results = {}
