@@ -152,6 +152,7 @@ def main():
         global_warmup_rounds=1,
         head_finetune_epochs=1,
         personalize_head=True,
+        recluster_interval=10,
     )
     pacfl_pers_history = pacfl_server.step_4_personalized_learning(epochs=num_rounds * epochs_per_round)
     

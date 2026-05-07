@@ -116,6 +116,7 @@ def main():
         global_warmup_rounds=1,
         head_finetune_epochs=1,
         personalize_head=True,
+        recluster_interval=10,
     )
     
     # 5. Personalized Learning for isolated clients (e.g., CA_2)

@@ -38,6 +38,30 @@ class BubbleServer:
             aggregated_weights.append(layer_weighted_sum)
         return aggregated_weights
 
+    @staticmethod
+    def _flatten_delta(local_weights, reference_weights):
+        delta = np.concatenate(
+            [
+                (local - reference).reshape(-1)
+                for local, reference in zip(local_weights, reference_weights)
+            ]
+        )
+        return np.concatenate([np.maximum(delta, 0.0), np.maximum(-delta, 0.0)])
+
+    def _cluster_update_vectors(self, update_vectors, max_clusters=15):
+        client_ids = list(update_vectors.keys())
+        vectors = np.array([update_vectors[cid] for cid in client_ids])
+        labels, k_star, _, isolated = perform_clustering(
+            vectors,
+            max_clusters=max_clusters,
+            complexity_penalty=0.001,
+            singleton_penalty=0.05,
+        )
+        bubble_dict = {}
+        for idx, label in enumerate(labels):
+            bubble_dict.setdefault(int(label), []).append(client_ids[idx])
+        return list(bubble_dict.values()), [client_ids[i] for i in isolated], int(k_star)
+
     def _build_shared_global_weights(self, global_warmup_rounds, epochs_per_round, logger=None):
         client_ids = list(self.clients.keys())
         if not client_ids:
@@ -135,6 +159,7 @@ class BubbleServer:
         global_warmup_rounds=0,
         head_finetune_epochs=1,
         personalize_head=False,
+        recluster_interval=10,
     ):
         """
         Performs FedAvg within each multi-client bubble.
@@ -152,6 +177,14 @@ class BubbleServer:
             if personalize_head and first_client is not None
             else None
         )
+        if personalize_head:
+            return self._step_3_personalized_dynamic(
+                num_rounds=num_rounds,
+                epochs_per_round=epochs_per_round,
+                head_finetune_epochs=head_finetune_epochs,
+                recluster_interval=recluster_interval,
+                logger=logger,
+            )
 
         for b_idx, bubble_cids in enumerate(self.bubbles):
             _emit(f"\n[Bubble {b_idx}] Starting FL with clients: {bubble_cids}", logger)
@@ -243,6 +276,129 @@ class BubbleServer:
                         logger,
                     )
 
+        _emit("\nFL Training Complete.", logger)
+        return history
+
+    def _step_3_personalized_dynamic(
+        self,
+        num_rounds,
+        epochs_per_round,
+        head_finetune_epochs,
+        recluster_interval,
+        logger=None,
+    ):
+        history = []
+        active_bubbles = [list(bubble) for bubble in self.bubbles] + [[cid] for cid in self.isolated]
+        common_weights = {
+            idx: self._copy_parameters(self.shared_lstm_weights)
+            for idx in range(len(active_bubbles))
+        }
+
+        for fl_round in range(1, num_rounds + 1):
+            _emit(f"  Personalized shared-LSTM round {fl_round}/{num_rounds}", logger)
+            next_common_weights = {}
+            latest_update_vectors = {}
+            latest_client_weights = {}
+            latest_client_samples = {}
+
+            for b_idx, bubble_cids in enumerate(active_bubbles):
+                global_weights = common_weights[b_idx]
+                round_weights = []
+                round_samples = []
+                for cid in bubble_cids:
+                    client = self.clients[cid]
+                    updated_weights, num_samples, _ = client.fit_shared_lstm(
+                        parameters=global_weights,
+                        config={"epochs": epochs_per_round},
+                    )
+                    round_weights.append(updated_weights)
+                    round_samples.append(num_samples)
+                    latest_update_vectors[cid] = self._flatten_delta(updated_weights, global_weights)
+                    latest_client_weights[cid] = updated_weights
+                    latest_client_samples[cid] = num_samples
+
+                aggregated_weights = self._fedavg(round_weights, round_samples)
+                next_common_weights[b_idx] = aggregated_weights
+
+                total_rmse = 0.0
+                total_smape = 0.0
+                total_samples = sum(round_samples)
+                for cid, num_samples in zip(bubble_cids, round_samples):
+                    _, _, metrics = self.clients[cid].evaluate_shared_lstm(
+                        parameters=aggregated_weights,
+                        config={},
+                    )
+                    total_rmse += metrics["rmse"] * num_samples
+                    total_smape += metrics["smape"] * num_samples
+
+                history.append(
+                    {
+                        "stage": "federated",
+                        "bubble": b_idx,
+                        "clients": bubble_cids,
+                        "round": fl_round,
+                        "num_samples": int(total_samples),
+                        "rmse": float(total_rmse / total_samples),
+                        "smape": float(total_smape / total_samples),
+                    }
+                )
+                _emit(
+                    f"    -> Bubble {b_idx} shared-LSTM metrics: RMSE={total_rmse / total_samples:.4f}, SMAPE={total_smape / total_samples:.4f}",
+                    logger,
+                )
+
+            common_weights = next_common_weights
+            should_recluster = (
+                recluster_interval > 0
+                and fl_round % recluster_interval == 0
+                and fl_round < num_rounds
+            )
+            if should_recluster:
+                active_bubbles, isolated, k_star = self._cluster_update_vectors(latest_update_vectors)
+                global_weights = self._fedavg(
+                    [latest_client_weights[cid] for cid in latest_client_weights],
+                    [latest_client_samples[cid] for cid in latest_client_weights],
+                )
+                common_weights = {
+                    idx: self._copy_parameters(global_weights)
+                    for idx in range(len(active_bubbles))
+                }
+                self.bubbles = [bubble for bubble in active_bubbles if len(bubble) > 1]
+                self.isolated = [cid for bubble in active_bubbles if len(bubble) == 1 for cid in bubble]
+                self.shared_lstm_weights = self._copy_parameters(global_weights)
+                _emit(
+                    f"[Dynamic Recluster] round={fl_round}, k_star={k_star}, bubbles={active_bubbles}, isolated={isolated}",
+                    logger,
+                )
+
+        if head_finetune_epochs > 0:
+            for b_idx, bubble_cids in enumerate(active_bubbles):
+                global_weights = common_weights[b_idx]
+                for cid in bubble_cids:
+                    client = self.clients[cid]
+                    updated_weights, num_samples, _ = client.fit_head(
+                        parameters=global_weights,
+                        config={"epochs": head_finetune_epochs},
+                    )
+                    _, _, metrics = client.evaluate(parameters=updated_weights, config={})
+                    history.append(
+                        {
+                            "stage": "head_finetune",
+                            "bubble": b_idx,
+                            "client": cid,
+                            "epochs": head_finetune_epochs,
+                            "num_samples": int(num_samples),
+                            "rmse": metrics["rmse"],
+                            "smape": metrics["smape"],
+                        }
+                    )
+                    _emit(
+                        f"    -> Client {cid} personalized head metrics: RMSE={metrics['rmse']:.4f}, SMAPE={metrics['smape']:.4f}",
+                        logger,
+                    )
+
+        self.bubbles = [bubble for bubble in active_bubbles if len(bubble) > 1]
+        self.isolated = []
         _emit("\nFL Training Complete.", logger)
         return history
 

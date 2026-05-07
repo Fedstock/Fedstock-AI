@@ -236,6 +236,36 @@ def run_server_clustering(feature_importances, output_path, config, logger):
     return output, clusters
 
 
+def cluster_vectors(client_vectors, config):
+    pyc_path = Path(__file__).resolve().parent / "src" / "fl" / "__pycache__" / "server_clustering.cpython-314.pyc"
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("server_clustering_pyc", pyc_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    client_ids = list(client_vectors.keys())
+    vectors = np.array([client_vectors[cid] for cid in client_ids], dtype=float)
+    labels, k_star, multi_bubbles, isolated = module.perform_clustering(
+        vectors,
+        max_clusters=config["max_clusters"],
+        complexity_penalty=config["complexity_penalty"],
+        singleton_penalty=config["singleton_penalty"],
+        isolation_std_multiplier=config["isolation_std_multiplier"],
+    )
+    assignments = {cid: int(labels[i]) for i, cid in enumerate(client_ids)}
+    isolated_clients = [client_ids[i] for i in isolated]
+    clusters = {}
+    for cid, label in assignments.items():
+        clusters.setdefault(int(label), []).append(cid)
+    return {
+        "k_star": int(k_star),
+        "assignments": assignments,
+        "isolated_clients": isolated_clients,
+        "multi_bubbles": [int(label) for label in multi_bubbles],
+    }, clusters
+
+
 def fit_client_scalers(data_dir, client_id, feature_cols, logger):
     feature_scaler = StandardScaler()
     target_scaler = RobustScaler()
@@ -440,6 +470,20 @@ def load_state_subset(model, partial_state):
     model.load_state_dict(state)
 
 
+def flatten_state_delta(local_state, reference_state):
+    delta = np.concatenate(
+        [
+            (local_state[key] - reference_state[key]).detach().cpu().numpy().reshape(-1)
+            for key in sorted(reference_state)
+        ]
+    )
+    return np.concatenate([np.maximum(delta, 0.0), np.maximum(-delta, 0.0)])
+
+
+def clone_partial_state(state):
+    return {key: value.detach().cpu().clone() for key, value in state.items()}
+
+
 def set_trainable_layers(model, trainable_prefixes):
     for name, parameter in model.named_parameters():
         parameter.requires_grad = name.startswith(trainable_prefixes)
@@ -600,6 +644,131 @@ def train_personalized_head_group(label, members, clients, feature_cols, config,
     return client_models, history
 
 
+def train_dynamic_pa_cfl(clients, initial_clusters, feature_cols, config, device, logger):
+    shared_initial_state = train_pa_cfl_shared_global_model(clients, feature_cols, config, device, logger)
+    initial_common_state = {
+        key: value
+        for key, value in shared_initial_state.items()
+        if key.startswith(COMMON_LAYER_PREFIXES)
+    }
+    client_models = {}
+    for client_id in CLIENT_IDS:
+        model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
+        model.load_state_dict(shared_initial_state)
+        client_models[client_id] = model
+
+    current_clusters = {int(label): list(members) for label, members in initial_clusters.items()}
+    common_states = {label: clone_partial_state(initial_common_state) for label in current_clusters}
+    history = []
+    recluster_events = []
+
+    for round_idx in range(1, config["num_rounds"] + 1):
+        next_common_states = {}
+        latest_client_common_states = {}
+        latest_update_vectors = {}
+
+        for label, members in sorted(current_clusters.items()):
+            if not members:
+                continue
+            shared_common_state = common_states.get(label, initial_common_state)
+            local_common_states = []
+            weights = []
+
+            for client_id in members:
+                local_model = client_models[client_id]
+                load_state_subset(local_model, shared_common_state)
+                reset_trainable_layers(local_model)
+                optimizer = make_optimizer(local_model, config["learning_rate"])
+                criterion = build_loss(clients[client_id]["target_scaler"], config, device)
+                for _ in range(config["epochs_per_round"]):
+                    train_one_epoch(local_model, clients[client_id]["train_loader"], optimizer, criterion, device)
+
+                local_common_state = clone_state_subset(local_model, COMMON_LAYER_PREFIXES)
+                local_common_states.append(local_common_state)
+                latest_client_common_states[client_id] = local_common_state
+                latest_update_vectors[client_id] = flatten_state_delta(local_common_state, shared_common_state)
+                weights.append(clients[client_id]["train_samples"])
+
+            averaged_common_state = average_state_dicts(local_common_states, weights)
+            next_common_states[label] = averaged_common_state
+
+            val_rows = []
+            for client_id in members:
+                load_state_subset(client_models[client_id], averaged_common_state)
+                row = evaluate(client_models[client_id], clients[client_id]["valid_loader"], clients[client_id]["target_scaler"], device)
+                row.update({"client_id": client_id, "cluster": int(label), "round": round_idx, "stage": "pa_cfl_valid"})
+                val_rows.append(row)
+            summary = aggregate_metrics(val_rows)
+            logger.info(
+                "[PA-CFL Bubble %s] round %d/%d valid RMSE=%.4f MAE=%.4f R2=%.4f SMAPE=%.4f members=%s",
+                label,
+                round_idx,
+                config["num_rounds"],
+                summary["rmse"],
+                summary["mae"],
+                summary["r2"],
+                summary["smape"],
+                members,
+            )
+            history.extend(val_rows)
+
+        common_states = next_common_states
+
+        should_recluster = (
+            config["recluster_interval"] > 0
+            and round_idx % config["recluster_interval"] == 0
+            and round_idx < config["num_rounds"]
+        )
+        if should_recluster:
+            clustering_meta, reclustered = cluster_vectors(latest_update_vectors, config)
+            global_common_state = average_state_dicts(
+                [latest_client_common_states[client_id] for client_id in CLIENT_IDS],
+                [clients[client_id]["train_samples"] for client_id in CLIENT_IDS],
+            )
+            current_clusters = {int(label): list(members) for label, members in reclustered.items()}
+            common_states = {label: clone_partial_state(global_common_state) for label in current_clusters}
+            event = {
+                "stage": "pa_cfl_recluster",
+                "round": round_idx,
+                "assignments": clustering_meta["assignments"],
+                "isolated_clients": clustering_meta["isolated_clients"],
+                "k_star": clustering_meta["k_star"],
+            }
+            recluster_events.append(event)
+            logger.info(
+                "[PA-CFL Recluster] round=%d k_star=%d assignments=%s isolated=%s",
+                round_idx,
+                clustering_meta["k_star"],
+                clustering_meta["assignments"],
+                clustering_meta["isolated_clients"],
+            )
+
+    for label, members in sorted(current_clusters.items()):
+        final_common_state = common_states[label]
+        if config["head_finetune_epochs"] <= 0:
+            continue
+        for client_id in members:
+            model = client_models[client_id]
+            load_state_subset(model, final_common_state)
+            criterion = build_loss(clients[client_id]["target_scaler"], config, device)
+            train_head_only(model, clients[client_id]["train_loader"], criterion, config, device)
+            row = evaluate(model, clients[client_id]["valid_loader"], clients[client_id]["target_scaler"], device)
+            row.update({"client_id": client_id, "cluster": int(label), "round": config["head_finetune_epochs"], "stage": "pa_cfl_head_finetune"})
+            history.append(row)
+            logger.info(
+                "[PA-CFL Head %s] client=%s epochs=%d valid RMSE=%.4f MAE=%.4f R2=%.4f SMAPE=%.4f",
+                label,
+                client_id,
+                config["head_finetune_epochs"],
+                row["rmse"],
+                row["mae"],
+                row["r2"],
+                row["smape"],
+            )
+
+    return client_models, history, current_clusters, recluster_events
+
+
 def train_local_models(clients, feature_cols, config, device, logger):
     final_models = {}
     history = []
@@ -624,43 +793,7 @@ def train_full_fedavg(clients, feature_cols, config, device, logger):
 
 
 def train_pa_cfl(clients, clusters, isolated_clients, feature_cols, config, device, logger):
-    final_models = {}
-    history = []
-    isolated_set = set(isolated_clients)
-    shared_initial_state = train_pa_cfl_shared_global_model(clients, feature_cols, config, device, logger)
-    for label, members in sorted(clusters.items()):
-        if len(members) == 1 and members[0] in isolated_set:
-            continue
-        logger.info("[PA-CFL Bubble %s] shared LSTM + personalized head members=%s", label, members)
-        models, rows = train_personalized_head_group(
-            label,
-            members,
-            clients,
-            feature_cols,
-            config,
-            device,
-            logger,
-            "pa_cfl_valid",
-            shared_initial_state,
-        )
-        final_models.update(models)
-        history.extend(rows)
-
-    for client_id in isolated_clients:
-        logger.info("[PA-CFL Personalized] client=%s", client_id)
-        model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
-        model.load_state_dict(shared_initial_state)
-        criterion = build_loss(clients[client_id]["target_scaler"], config, device)
-        set_trainable_layers(model, HEAD_LAYER_PREFIXES)
-        optimizer = make_optimizer(model, config["learning_rate"])
-        for epoch in range(1, config["personalized_epochs"] + 1):
-            train_one_epoch(model, clients[client_id]["train_loader"], optimizer, criterion, device)
-            row = evaluate(model, clients[client_id]["valid_loader"], clients[client_id]["target_scaler"], device)
-            row.update({"client_id": client_id, "cluster": int(next(k for k, v in clusters.items() if client_id in v)), "round": epoch, "stage": "pa_cfl_personalized_valid"})
-            history.append(row)
-        reset_trainable_layers(model)
-        final_models[client_id] = model
-    return final_models, history
+    return train_dynamic_pa_cfl(clients, clusters, feature_cols, config, device, logger)
 
 
 def evaluate_test_models(models, clients, clusters, device, logger, method):
@@ -709,8 +842,16 @@ def run_single_seed(data_dir, outputs_dir, feature_cols, feature_selection, seed
     full_models, full_history = train_full_fedavg(clients, feature_cols, config, device, logger)
     full_rows, full_summary = evaluate_test_models(full_models, clients, {0: list(CLIENT_IDS)}, device, logger, "full_fedavg")
 
-    pa_models, pa_history = train_pa_cfl(clients, pa_clusters, clustering_result["isolated_clients"], feature_cols, config, device, logger)
-    pa_rows, pa_summary = evaluate_test_models(pa_models, clients, pa_clusters, device, logger, "pa_cfl")
+    pa_models, pa_history, final_pa_clusters, recluster_events = train_pa_cfl(
+        clients,
+        pa_clusters,
+        clustering_result["isolated_clients"],
+        feature_cols,
+        config,
+        device,
+        logger,
+    )
+    pa_rows, pa_summary = evaluate_test_models(pa_models, clients, final_pa_clusters, device, logger, "pa_cfl")
 
     summaries = {
         "local": compact_metrics(local_summary),
@@ -723,6 +864,8 @@ def run_single_seed(data_dir, outputs_dir, feature_cols, feature_selection, seed
         "config": config,
         "feature_selection": feature_selection,
         "clustering": clustering_result,
+        "dynamic_reclustering": recluster_events,
+        "final_pa_clusters": {str(label): members for label, members in final_pa_clusters.items()},
         "validation_history": local_history + full_history + pa_history,
         "test_by_client": {
             "local": [compact_metrics(row) | {"client_id": row["client_id"], "cluster": row["cluster"]} for row in local_rows],
@@ -763,6 +906,7 @@ def main():
     parser.add_argument("--personalized-epochs", type=int, default=4)
     parser.add_argument("--pa-cfl-global-warmup-rounds", type=int, default=1)
     parser.add_argument("--head-finetune-epochs", type=int, default=1)
+    parser.add_argument("--recluster-interval", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--hidden-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=0.003)
@@ -796,6 +940,7 @@ def main():
         "personalized_epochs": args.personalized_epochs,
         "pa_cfl_global_warmup_rounds": args.pa_cfl_global_warmup_rounds,
         "head_finetune_epochs": args.head_finetune_epochs,
+        "recluster_interval": args.recluster_interval,
         "batch_size": args.batch_size,
         "hidden_size": args.hidden_size,
         "learning_rate": args.learning_rate,
@@ -809,6 +954,7 @@ def main():
         "target_scaler": "client-specific RobustScaler fitted on each client's train.csv only",
         "loss": "HuberSMAPELoss: Huber on RobustScaler-transformed targets plus SMAPE term on original target scale",
         "pa_cfl_personalization": "bubble-level FedAvg shares only LSTM parameters; each client keeps and fine-tunes an independent fc head",
+        "pa_cfl_dynamic_reclustering": "every recluster_interval rounds, compare latest client LSTM update vectors, rebuild bubbles, update the global LSTM, and deploy it before continuing training",
         "corr_threshold": args.corr_threshold,
         "anova_top_k": args.anova_top_k,
         "feature_selection_max_samples_per_client": args.feature_selection_max_samples_per_client or None,
