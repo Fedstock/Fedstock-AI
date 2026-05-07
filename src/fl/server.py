@@ -19,6 +19,47 @@ class BubbleServer:
         self.clients = clients_dict
         self.bubbles = []
         self.isolated = []
+        self.shared_global_weights = None
+
+    @staticmethod
+    def _copy_parameters(parameters):
+        return [param.copy() for param in parameters]
+
+    @staticmethod
+    def _fedavg(round_weights, round_samples):
+        total_samples = sum(round_samples)
+        aggregated_weights = []
+        for layer_idx in range(len(round_weights[0])):
+            layer_weighted_sum = sum(
+                round_weights[c_idx][layer_idx] * (round_samples[c_idx] / total_samples)
+                for c_idx in range(len(round_weights))
+            )
+            aggregated_weights.append(layer_weighted_sum)
+        return aggregated_weights
+
+    def _build_shared_global_weights(self, global_warmup_rounds, epochs_per_round, logger=None):
+        client_ids = list(self.clients.keys())
+        if not client_ids:
+            return None
+
+        global_weights = self.clients[client_ids[0]].get_parameters({})
+        _emit(
+            f"[Shared Global] warmup_rounds={global_warmup_rounds}, clients={client_ids}",
+            logger,
+        )
+        for warmup_round in range(1, global_warmup_rounds + 1):
+            round_weights = []
+            round_samples = []
+            for cid in client_ids:
+                updated_weights, num_samples, _ = self.clients[cid].fit(
+                    parameters=global_weights,
+                    config={"epochs": epochs_per_round},
+                )
+                round_weights.append(updated_weights)
+                round_samples.append(num_samples)
+            global_weights = self._fedavg(round_weights, round_samples)
+            _emit(f"[Shared Global] warmup round {warmup_round}/{global_warmup_rounds} complete", logger)
+        return self._copy_parameters(global_weights)
         
     def load_clustering_results(self, clustering_json_path, logger=None):
         """
@@ -85,19 +126,24 @@ class BubbleServer:
         print(f"Multi-Client Bubbles: {self.bubbles}")
         print(f"Isolated (Single-Client) Bubbles: {self.isolated}")
         
-    def step_3_federated_learning(self, num_rounds=3, epochs_per_round=5, logger=None):
+    def step_3_federated_learning(self, num_rounds=3, epochs_per_round=5, logger=None, global_warmup_rounds=0):
         """
         Performs FedAvg within each multi-client bubble.
         """
         _emit("\n--- PA-CFL Step 3: Federated Learning within Bubbles ---", logger)
         history = []
-        
+        self.shared_global_weights = self._build_shared_global_weights(
+            global_warmup_rounds=global_warmup_rounds,
+            epochs_per_round=epochs_per_round,
+            logger=logger,
+        )
+
         for b_idx, bubble_cids in enumerate(self.bubbles):
             _emit(f"\n[Bubble {b_idx}] Starting FL with clients: {bubble_cids}", logger)
-            
-            # Initialize global model weights (using the first client's initial weights)
-            global_weights = self.clients[bubble_cids[0]].get_parameters({})
-            
+
+            # Every bubble starts from the same shared global model.
+            global_weights = self._copy_parameters(self.shared_global_weights)
+
             for fl_round in range(1, num_rounds + 1):
                 _emit(f"  Round {fl_round}/{num_rounds}", logger)
                 
@@ -117,16 +163,7 @@ class BubbleServer:
                     
                 # 2. Aggregate using FedAvg
                 total_samples = sum(round_samples)
-                aggregated_weights = []
-                
-                for layer_idx in range(len(global_weights)):
-                    layer_weighted_sum = sum(
-                        round_weights[c_idx][layer_idx] * (round_samples[c_idx] / total_samples)
-                        for c_idx in range(len(bubble_cids))
-                    )
-                    aggregated_weights.append(layer_weighted_sum)
-                    
-                global_weights = aggregated_weights
+                global_weights = self._fedavg(round_weights, round_samples)
                 
                 # 3. Evaluate on clients
                 total_rmse = 0.0
@@ -175,8 +212,11 @@ class BubbleServer:
             _emit(f"\n[Personalized] Starting local training for client: {cid}", logger)
             client = self.clients[cid]
             
-            # Start with current weights
-            current_weights = client.get_parameters({})
+            # Start isolated bubbles from the same shared global model used by multi-client bubbles.
+            if self.shared_global_weights is None:
+                current_weights = client.get_parameters({})
+            else:
+                current_weights = self._copy_parameters(self.shared_global_weights)
             
             # Train locally
             updated_weights, num_samples, _ = client.fit(

@@ -110,7 +110,7 @@ def main():
         server.step_1_collect_and_cluster()
         
     # 4. Federated Learning for multi-client bubbles
-    server.step_3_federated_learning(num_rounds=3, epochs_per_round=1)
+    server.step_3_federated_learning(num_rounds=3, epochs_per_round=1, global_warmup_rounds=1)
     
     # 5. Personalized Learning for isolated clients (e.g., CA_2)
     server.step_4_personalized_learning(epochs=3)

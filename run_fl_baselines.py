@@ -146,7 +146,11 @@ def main():
     pacfl_clients = {cid: copy.deepcopy(c) for cid, c in clients_dict.items()}
     pacfl_server = BubbleServer(pacfl_clients)
     pacfl_server.step_1_collect_and_cluster()
-    pacfl_fed_history = pacfl_server.step_3_federated_learning(num_rounds=num_rounds, epochs_per_round=epochs_per_round)
+    pacfl_fed_history = pacfl_server.step_3_federated_learning(
+        num_rounds=num_rounds,
+        epochs_per_round=epochs_per_round,
+        global_warmup_rounds=1,
+    )
     pacfl_pers_history = pacfl_server.step_4_personalized_learning(epochs=num_rounds * epochs_per_round)
     
     # Aggregate last round metrics for bubbles and personalized

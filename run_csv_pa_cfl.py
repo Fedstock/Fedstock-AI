@@ -419,8 +419,40 @@ def compact_metrics(row):
     return {key: row[key] for key in ("rmse", "mae", "smape", "r2", "num_samples")}
 
 
-def train_fedavg_group(label, members, clients, feature_cols, config, device, logger, stage):
+def clone_model_state(model):
+    return {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+
+
+def train_pa_cfl_shared_global_model(clients, feature_cols, config, device, logger):
     global_model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
+    warmup_rounds = config["pa_cfl_global_warmup_rounds"]
+    logger.info(
+        "[PA-CFL Shared Global] warmup_rounds=%d members=%s",
+        warmup_rounds,
+        list(CLIENT_IDS),
+    )
+
+    for round_idx in range(1, warmup_rounds + 1):
+        local_states = []
+        weights = []
+        for client_id in CLIENT_IDS:
+            local_model = copy.deepcopy(global_model).to(device)
+            optimizer = torch.optim.Adam(local_model.parameters(), lr=config["learning_rate"])
+            criterion = build_loss(clients[client_id]["target_scaler"], config, device)
+            for _ in range(config["epochs_per_round"]):
+                train_one_epoch(local_model, clients[client_id]["train_loader"], optimizer, criterion, device)
+            local_states.append(clone_model_state(local_model))
+            weights.append(clients[client_id]["train_samples"])
+        global_model.load_state_dict(average_state_dicts(local_states, weights))
+        logger.info("[PA-CFL Shared Global] warmup round %d/%d complete", round_idx, warmup_rounds)
+
+    return clone_model_state(global_model)
+
+
+def train_fedavg_group(label, members, clients, feature_cols, config, device, logger, stage, initial_state=None):
+    global_model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
+    if initial_state is not None:
+        global_model.load_state_dict(initial_state)
     history = []
     for round_idx in range(1, config["num_rounds"] + 1):
         local_states = []
@@ -431,7 +463,7 @@ def train_fedavg_group(label, members, clients, feature_cols, config, device, lo
             criterion = build_loss(clients[client_id]["target_scaler"], config, device)
             for _ in range(config["epochs_per_round"]):
                 train_one_epoch(local_model, clients[client_id]["train_loader"], optimizer, criterion, device)
-            local_states.append({k: v.detach().cpu().clone() for k, v in local_model.state_dict().items()})
+            local_states.append(clone_model_state(local_model))
             weights.append(clients[client_id]["train_samples"])
         global_model.load_state_dict(average_state_dicts(local_states, weights))
 
@@ -483,17 +515,29 @@ def train_pa_cfl(clients, clusters, isolated_clients, feature_cols, config, devi
     final_models = {}
     history = []
     isolated_set = set(isolated_clients)
+    shared_initial_state = train_pa_cfl_shared_global_model(clients, feature_cols, config, device, logger)
     for label, members in sorted(clusters.items()):
         if len(members) == 1 and members[0] in isolated_set:
             continue
         logger.info("[PA-CFL Bubble %s] FedAvg members=%s", label, members)
-        models, rows = train_fedavg_group(label, members, clients, feature_cols, config, device, logger, "pa_cfl_valid")
+        models, rows = train_fedavg_group(
+            label,
+            members,
+            clients,
+            feature_cols,
+            config,
+            device,
+            logger,
+            "pa_cfl_valid",
+            initial_state=shared_initial_state,
+        )
         final_models.update(models)
         history.extend(rows)
 
     for client_id in isolated_clients:
         logger.info("[PA-CFL Personalized] client=%s", client_id)
         model = LightweightLSTM(input_size=len(feature_cols), hidden_size=config["hidden_size"]).to(device)
+        model.load_state_dict(shared_initial_state)
         optimizer = torch.optim.Adam(model.parameters(), lr=config["learning_rate"])
         criterion = build_loss(clients[client_id]["target_scaler"], config, device)
         for epoch in range(1, config["personalized_epochs"] + 1):
@@ -603,6 +647,7 @@ def main():
     parser.add_argument("--num-rounds", type=int, default=4)
     parser.add_argument("--epochs-per-round", type=int, default=1)
     parser.add_argument("--personalized-epochs", type=int, default=4)
+    parser.add_argument("--pa-cfl-global-warmup-rounds", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--hidden-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=0.003)
@@ -634,6 +679,7 @@ def main():
         "num_rounds": args.num_rounds,
         "epochs_per_round": args.epochs_per_round,
         "personalized_epochs": args.personalized_epochs,
+        "pa_cfl_global_warmup_rounds": args.pa_cfl_global_warmup_rounds,
         "batch_size": args.batch_size,
         "hidden_size": args.hidden_size,
         "learning_rate": args.learning_rate,
