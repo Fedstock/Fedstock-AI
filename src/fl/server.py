@@ -66,6 +66,31 @@ class BubbleServer:
             bubble_dict.setdefault(int(label), []).append(client_ids[idx])
         return list(bubble_dict.values()), [client_ids[i] for i in isolated], int(k_star)
 
+    def _aggregate_client_weights(self, client_ids, client_weights, client_samples):
+        return self._fedavg(
+            [client_weights[cid] for cid in client_ids],
+            [client_samples[cid] for cid in client_ids],
+        )
+
+    def _build_reclustered_common_weights(
+        self,
+        active_bubbles,
+        latest_client_weights,
+        latest_client_samples,
+        common_global_weights,
+    ):
+        reclustered_weights = {}
+        for b_idx, bubble_cids in enumerate(active_bubbles):
+            if len(bubble_cids) == 1:
+                reclustered_weights[b_idx] = self._copy_parameters(common_global_weights)
+            else:
+                reclustered_weights[b_idx] = self._aggregate_client_weights(
+                    bubble_cids,
+                    latest_client_weights,
+                    latest_client_samples,
+                )
+        return reclustered_weights
+
     def _build_shared_global_weights(self, global_warmup_rounds, epochs_per_round, logger=None):
         client_ids = list(self.clients.keys())
         if not client_ids:
@@ -456,19 +481,22 @@ class BubbleServer:
             )
             if should_recluster:
                 active_bubbles, isolated, k_star = self._cluster_update_vectors(latest_update_vectors)
-                global_weights = self._fedavg(
-                    [latest_client_weights[cid] for cid in latest_client_weights],
-                    [latest_client_samples[cid] for cid in latest_client_weights],
+                common_global_weights = self._aggregate_client_weights(
+                    list(latest_client_weights.keys()),
+                    latest_client_weights,
+                    latest_client_samples,
                 )
-                common_weights = {
-                    idx: self._copy_parameters(global_weights)
-                    for idx in range(len(active_bubbles))
-                }
+                common_weights = self._build_reclustered_common_weights(
+                    active_bubbles=active_bubbles,
+                    latest_client_weights=latest_client_weights,
+                    latest_client_samples=latest_client_samples,
+                    common_global_weights=common_global_weights,
+                )
                 self.bubbles = [bubble for bubble in active_bubbles if len(bubble) > 1]
                 self.isolated = [cid for bubble in active_bubbles if len(bubble) == 1 for cid in bubble]
-                self.shared_lstm_weights = self._copy_parameters(global_weights)
+                self.shared_lstm_weights = self._copy_parameters(common_global_weights)
                 _emit(
-                    f"[Dynamic Recluster] round={fl_round}, k_star={k_star}, bubbles={active_bubbles}, isolated={isolated}",
+                    f"[Dynamic Recluster] round={fl_round}, k_star={k_star}, bubbles={active_bubbles}, isolated={isolated}, deployment=cluster_specific",
                     logger,
                 )
                 self.save_clustering_results("outputs/clustering_results.json")
@@ -558,4 +586,3 @@ class BubbleServer:
                     history.append(result)
 
         return history
-
