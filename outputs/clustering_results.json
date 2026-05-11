@@ -1,0 +1,19 @@
+{
+    "k_star": 2,
+    "assignments": {
+        "CA_1": 0,
+        "CA_2": 0,
+        "CA_3": 0,
+        "CA_4": 0,
+        "TX_1": 0,
+        "TX_2": 0,
+        "TX_3": 0,
+        "WI_1": 0,
+        "WI_2": 1,
+        "WI_3": 0
+    },
+    "isolated_clients": [
+        "WI_2"
+    ],
+    "max_clusters": 5
+}
