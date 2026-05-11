@@ -7,8 +7,9 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import RobustScaler
 from torch.utils.data import TensorDataset, DataLoader
 
-from src.dataset import load_client_data
+from src.dataset import CANDIDATE_FEATURE_COLS, load_client_data
 from src.fl.client import FedStockClient
+from src.fl.extract_features import compute_anova_feature_selection, save_feature_selection
 from src.fl.server import BubbleServer
 
 def create_sequences(X, y, seq_len):
@@ -20,12 +21,16 @@ def create_sequences(X, y, seq_len):
         ys.append(y[i + seq_len])
     return np.array(xs), np.array(ys)
 
-def setup_client(client_id, data_dir, seq_len=14):
+def setup_client(client_id, data_dir, seq_len=14, selected_features=None):
     """
     Load real data for a client, split into train/val, and initialize FedStockClient.
     """
     print(f"Loading data for {client_id}...")
-    X_scaled, y_raw, scaler = load_client_data(client_id, data_dir=data_dir)
+    X_scaled, y_raw, scaler = load_client_data(
+        client_id,
+        data_dir=data_dir,
+        feature_cols=selected_features,
+    )
     
     # Use all samples for the entire dataset
     # max_samples = 5000 
@@ -107,9 +112,21 @@ def main():
         print("No clients found. Exiting.")
         return
 
+    feature_selection_path = os.path.join(current_dir, "outputs", "feature_selection.json")
+    feature_selection = compute_anova_feature_selection(
+        clients=client_ids,
+        data_dir=data_dir,
+        candidate_features=CANDIDATE_FEATURE_COLS,
+        top_k=12,
+        alpha=0.10,
+    )
+    save_feature_selection(feature_selection, feature_selection_path)
+    selected_features = feature_selection["selected_features"]
+    print(f"Selected {len(selected_features)} ANOVA features: {selected_features}")
+
     clients_dict = {}
     for cid in client_ids:
-        clients_dict[cid] = setup_client(cid, data_dir)
+        clients_dict[cid] = setup_client(cid, data_dir, selected_features=selected_features)
         
     # Hyperparameters
     num_rounds = 100
@@ -224,24 +241,6 @@ def main():
         f.write("\n## Results\n")
         for s in strategies:
             f.write(f"- **{s}**: RMSE = {results[s]['rmse']:.4f}, SMAPE = {results[s]['smape']:.4f}\n")
-
-    # Save feature selection info
-    feature_selection_path = os.path.join(current_dir, "outputs", "feature_selection.json")
-    feature_cols = [
-        'dayofweek', 'month', 'is_weekend', 'is_holiday',
-        'lag_7', 'lag_14', 'lag_28',
-        'rolling_mean_7', 'rolling_std_7', 'rolling_mean_28', 'rolling_std_28',
-        'price_change_rate', 'sell_price', 'week_of_year', 'is_month_start', 'is_month_end'
-    ]
-    with open(feature_selection_path, "w") as f:
-        import json
-        json.dump({
-            "selected_features": feature_cols,
-            "source": "src/dataset.py hardcoded list",
-            "count": len(feature_cols)
-        }, f, indent=4)
-    print(f"Feature selection info saved to {feature_selection_path}")
-
 
 if __name__ == "__main__":
     main()

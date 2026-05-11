@@ -1,10 +1,11 @@
 import numpy as np
-import xgboost as xgb
 
 def calculate_feature_importance(X, y):
     """
     Train an XGBoost model and return the feature importance scores.
     """
+    import xgboost as xgb
+
     model = xgb.XGBRegressor(n_estimators=100, random_state=42, n_jobs=-1, tree_method='hist')
     model.fit(X, y)
     return model.feature_importances_
