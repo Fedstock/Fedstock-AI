@@ -114,7 +114,11 @@ python run_fl_baselines.py
  │ ┣ 📜 baseline_comparison.png # 전략 비교 시각화
  │ ┣ 📜 clustering_results.json # 클러스터링 결과
  │ ┣ 📜 feature_importances.json # 피처 중요도 결과
- │ ┗ 📜 feature_selection.json  # 피처 선택 결과
+ │ ┣ 📜 feature_selection.json  # 피처 선택 결과
+ │ ┗ 📂 models                  # 학습된 모델 가중치 (.pt)
+ │   ┣ 📂 clients               # 매장별 개인화 모델 (70개)
+ │   ┗ 📂 bubbles               # 버블별 공유 Body 모델
+
  ┣ 📂 temp                      # 비필수 파일 (문서, 이전 스크립트 등)
  ┗ 📜 README.md
 ```

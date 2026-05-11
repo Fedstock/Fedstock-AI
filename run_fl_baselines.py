@@ -164,6 +164,10 @@ def main():
     results["PA-CFL"] = {"rmse": pacfl_rmse, "smape": pacfl_smape}
     print(f"[PA-CFL] RMSE: {pacfl_rmse:.4f}, SMAPE: {pacfl_smape:.4f}")
     
+    # Save final models for PA-CFL
+    pacfl_server.save_models(output_dir=os.path.join(current_dir, "outputs", "models"))
+
+    
     # Visualization
     print("\n=== Generating Visualizations ===")
     strategies = list(results.keys())

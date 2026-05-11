@@ -1,5 +1,6 @@
 import numpy as np
 import flwr as fl
+import torch
 from src.fl.server_clustering import perform_clustering
 
 def _emit(message, logger=None):
@@ -7,6 +8,7 @@ def _emit(message, logger=None):
         logger.info(message)
     else:
         print(message)
+
 
 class BubbleServer:
     """
@@ -194,6 +196,37 @@ class BubbleServer:
         with open(output_path, 'w') as f:
             json.dump(result, f, indent=4)
         print(f"Clustering results saved to {output_path}")
+
+    def save_models(self, output_dir="outputs/models"):
+        """
+        Saves all client models and bubble weights to the specified directory.
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        print(f"Saving all models to {output_dir}...")
+
+        
+        # 1. Save individual client models
+        client_dir = os.path.join(output_dir, "clients")
+        os.makedirs(client_dir, exist_ok=True)
+        for cid, client in self.clients.items():
+            model_path = os.path.join(client_dir, f"client_{cid}.pt")
+            torch.save(client.model.state_dict(), model_path)
+            
+        # 2. Save bubble/global weights if available
+        if self.bubbles:
+            bubble_dir = os.path.join(output_dir, "bubbles")
+            os.makedirs(bubble_dir, exist_ok=True)
+            for b_idx, bubble_cids in enumerate(self.bubbles):
+                # We use the weights of the first client in the bubble as a representative of shared weights
+                # (since they were just synchronized)
+                rep_client = self.clients[bubble_cids[0]]
+                bubble_path = os.path.join(bubble_dir, f"bubble_{b_idx}.pt")
+                # Only save shared layers (LSTM) for bubbles
+                shared_state = {k: v for k, v in rep_client.model.state_dict().items() if k.startswith(("lstm.",))}
+                torch.save(shared_state, bubble_path)
+                
+        print(f"All model weights saved successfully.")
+
 
     def step_3_federated_learning(
         self,
