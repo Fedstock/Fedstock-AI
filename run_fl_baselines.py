@@ -219,5 +219,23 @@ def main():
         for s in strategies:
             f.write(f"- **{s}**: RMSE = {results[s]['rmse']:.4f}, SMAPE = {results[s]['smape']:.4f}\n")
 
+    # Save feature selection info
+    feature_selection_path = os.path.join(current_dir, "outputs", "feature_selection.json")
+    feature_cols = [
+        'dayofweek', 'month', 'is_weekend', 'is_holiday',
+        'lag_7', 'lag_14', 'lag_28',
+        'rolling_mean_7', 'rolling_std_7', 'rolling_mean_28', 'rolling_std_28',
+        'price_change_rate', 'sell_price', 'week_of_year', 'is_month_start', 'is_month_end'
+    ]
+    with open(feature_selection_path, "w") as f:
+        import json
+        json.dump({
+            "selected_features": feature_cols,
+            "source": "src/dataset.py hardcoded list",
+            "count": len(feature_cols)
+        }, f, indent=4)
+    print(f"Feature selection info saved to {feature_selection_path}")
+
+
 if __name__ == "__main__":
     main()

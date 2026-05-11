@@ -124,8 +124,19 @@ class BubbleServer:
             noisy_imp = client.extract_noisy_importance()
             noisy_importances.append(noisy_imp)
             
+        # Save noisy feature importances to outputs folder
+        import json
+        import os
+        import numpy as np
+        
+        importance_dict = {cid: imp.tolist() for cid, imp in zip(client_ids, noisy_importances)}
+        os.makedirs("outputs", exist_ok=True)
+        with open("outputs/feature_importances.json", 'w') as f:
+            json.dump(importance_dict, f, indent=4)
+        print("Feature importances saved to outputs/feature_importances.json")
+
         noisy_importances = np.array(noisy_importances)
-        labels, k_star, multi_bubbles, single_bubbles = perform_clustering(
+        labels, k_star, _, _ = perform_clustering(
             noisy_importances,
             max_clusters=15,
             complexity_penalty=0.001,
@@ -142,17 +153,8 @@ class BubbleServer:
             bubble_groups[label].append(client_ids[idx])
             
         # Separate into multi-client and single-client
-        
-        print(f"Optimal Clusters (k*): {k_star}")
-        
-        # Group client IDs into bubbles
-        bubble_groups = {}
-        for idx, label in enumerate(labels):
-            if label not in bubble_groups:
-                bubble_groups[label] = []
-            bubble_groups[label].append(client_ids[idx])
-            
-        # Separate into multi-client and single-client
+        self.bubbles = []
+        self.isolated = []
         for label, cids in bubble_groups.items():
             if len(cids) > 1:
                 self.bubbles.append(cids)
