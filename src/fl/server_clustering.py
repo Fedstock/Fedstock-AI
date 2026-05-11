@@ -237,11 +237,37 @@ def run_clustering_pipeline(feature_json_path, output_json_path=None):
     
     if output_json_path:
         os.makedirs(os.path.dirname(output_json_path), exist_ok=True)
+        isolated_clients = [client_ids[i] for i in isolated]
+        cluster_sizes = [len(bubble) for bubble in multi_bubbles] + [1 for _ in isolated_clients]
+        record = {
+            "sequence": 1,
+            "stage": "initial_clustering",
+            "round": 0,
+            "k_star": int(k_star),
+            "total_clients": int(sum(cluster_sizes)),
+            "num_clusters": len(cluster_sizes),
+            "num_multi_client_bubbles": len(multi_bubbles),
+            "num_isolated_clients": len(isolated_clients),
+            "cluster_sizes": cluster_sizes,
+            "cluster_size_stats": {
+                "min": int(min(cluster_sizes)) if cluster_sizes else 0,
+                "max": int(max(cluster_sizes)) if cluster_sizes else 0,
+                "mean": float(np.mean(cluster_sizes)) if cluster_sizes else 0.0,
+            },
+            "multi_client_bubbles": [
+                {
+                    "bubble_id": idx,
+                    "size": len(bubble),
+                }
+                for idx, bubble in enumerate(multi_bubbles)
+            ],
+            "isolated_clients": isolated_clients,
+        }
         with open(output_json_path, 'w') as f:
             json.dump({
-                "k_star": int(k_star),
-                "assignments": cluster_assignments,
-                "isolated_clients": [client_ids[i] for i in isolated]
+                "schema_version": 2,
+                "description": "Chronological clustering records. Client-to-cluster assignments and per-bubble client lists are omitted.",
+                "records": [record],
             }, f, indent=4)
         print(f"\nSaved clustering results to {output_json_path}")
         

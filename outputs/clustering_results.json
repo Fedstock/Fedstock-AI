@@ -1,78 +1,557 @@
 {
-    "k_star": 2,
-    "assignments": {
-        "CA_1_FOODS_1": 0,
-        "TX_1_HOBBIES_1": 0,
-        "WI_3_HOBBIES_1": 0,
-        "CA_3_FOODS_1": 0,
-        "TX_3_FOODS_2": 0,
-        "TX_3_HOUSEHOLD_2": 0,
-        "WI_1_FOODS_1": 0,
-        "WI_2_HOUSEHOLD_2": 0,
-        "WI_2_HOBBIES_1": 0,
-        "CA_4_FOODS_1": 0,
-        "CA_3_FOODS_3": 0,
-        "TX_2_HOBBIES_1": 0,
-        "CA_3_HOBBIES_2": 0,
-        "CA_1_FOODS_3": 0,
-        "TX_1_FOODS_1": 0,
-        "CA_1_FOODS_2": 0,
-        "WI_3_FOODS_2": 0,
-        "WI_3_HOUSEHOLD_1": 0,
-        "WI_1_HOUSEHOLD_2": 0,
-        "TX_2_HOBBIES_2": 0,
-        "WI_2_FOODS_2": 0,
-        "CA_3_FOODS_2": 0,
-        "TX_3_HOUSEHOLD_1": 0,
-        "CA_1_HOUSEHOLD_2": 0,
-        "CA_3_HOUSEHOLD_2": 0,
-        "WI_3_FOODS_1": 0,
-        "WI_1_HOUSEHOLD_1": 0,
-        "WI_1_FOODS_2": 0,
-        "WI_2_FOODS_1": 0,
-        "TX_2_HOUSEHOLD_1": 0,
-        "WI_2_FOODS_3": 0,
-        "CA_4_FOODS_3": 0,
-        "WI_1_FOODS_3": 0,
-        "TX_1_FOODS_3": 0,
-        "TX_2_HOUSEHOLD_2": 0,
-        "TX_2_FOODS_3": 0,
-        "WI_3_HOBBIES_2": 0,
-        "WI_2_HOUSEHOLD_1": 0,
-        "CA_2_FOODS_1": 0,
-        "WI_2_HOBBIES_2": 0,
-        "CA_4_HOBBIES_2": 0,
-        "CA_4_HOBBIES_1": 0,
-        "TX_3_HOBBIES_2": 0,
-        "CA_1_HOBBIES_1": 0,
-        "CA_1_HOBBIES_2": 0,
-        "TX_2_FOODS_1": 0,
-        "TX_1_HOUSEHOLD_1": 0,
-        "CA_4_FOODS_2": 0,
-        "CA_2_HOUSEHOLD_2": 0,
-        "CA_2_HOUSEHOLD_1": 0,
-        "WI_1_HOBBIES_2": 0,
-        "CA_3_HOUSEHOLD_1": 0,
-        "TX_2_FOODS_2": 0,
-        "CA_3_HOBBIES_1": 0,
-        "TX_1_HOBBIES_2": 0,
-        "WI_3_HOUSEHOLD_2": 0,
-        "CA_2_HOBBIES_2": 0,
-        "CA_2_FOODS_3": 0,
-        "CA_4_HOUSEHOLD_1": 0,
-        "CA_2_FOODS_2": 0,
-        "TX_1_FOODS_2": 0,
-        "CA_4_HOUSEHOLD_2": 0,
-        "CA_2_HOBBIES_1": 0,
-        "WI_1_HOBBIES_1": 0,
-        "TX_1_HOUSEHOLD_2": 0,
-        "TX_3_FOODS_1": 0,
-        "TX_3_HOBBIES_1": 0,
-        "WI_3_FOODS_3": 0,
-        "CA_1_HOUSEHOLD_1": 0,
-        "TX_3_FOODS_3": 1
-    },
-    "isolated_clients": [
-        "TX_3_FOODS_3"
+    "schema_version": 2,
+    "description": "Chronological clustering records. Client-to-cluster assignments and per-bubble client lists are omitted.",
+    "records": [
+        {
+            "sequence": 1,
+            "stage": "initial_clustering",
+            "round": 0,
+            "k_star": 11,
+            "total_clients": 70,
+            "num_clusters": 11,
+            "num_multi_client_bubbles": 11,
+            "num_isolated_clients": 0,
+            "cluster_sizes": [
+                8,
+                13,
+                5,
+                5,
+                3,
+                10,
+                9,
+                2,
+                4,
+                5,
+                6
+            ],
+            "cluster_size_stats": {
+                "min": 2,
+                "max": 13,
+                "mean": 6.363636363636363
+            },
+            "multi_client_bubbles": [
+                {
+                    "bubble_id": 0,
+                    "size": 8
+                },
+                {
+                    "bubble_id": 1,
+                    "size": 13
+                },
+                {
+                    "bubble_id": 2,
+                    "size": 5
+                },
+                {
+                    "bubble_id": 3,
+                    "size": 5
+                },
+                {
+                    "bubble_id": 4,
+                    "size": 3
+                },
+                {
+                    "bubble_id": 5,
+                    "size": 10
+                },
+                {
+                    "bubble_id": 6,
+                    "size": 9
+                },
+                {
+                    "bubble_id": 7,
+                    "size": 2
+                },
+                {
+                    "bubble_id": 8,
+                    "size": 4
+                },
+                {
+                    "bubble_id": 9,
+                    "size": 5
+                },
+                {
+                    "bubble_id": 10,
+                    "size": 6
+                }
+            ],
+            "isolated_clients": []
+        },
+        {
+            "sequence": 2,
+            "stage": "dynamic_recluster",
+            "round": 10,
+            "k_star": 11,
+            "total_clients": 70,
+            "num_clusters": 11,
+            "num_multi_client_bubbles": 11,
+            "num_isolated_clients": 0,
+            "cluster_sizes": [
+                5,
+                8,
+                4,
+                13,
+                3,
+                11,
+                2,
+                10,
+                8,
+                2,
+                4
+            ],
+            "cluster_size_stats": {
+                "min": 2,
+                "max": 13,
+                "mean": 6.363636363636363
+            },
+            "multi_client_bubbles": [
+                {
+                    "bubble_id": 0,
+                    "size": 5
+                },
+                {
+                    "bubble_id": 1,
+                    "size": 8
+                },
+                {
+                    "bubble_id": 2,
+                    "size": 4
+                },
+                {
+                    "bubble_id": 3,
+                    "size": 13
+                },
+                {
+                    "bubble_id": 4,
+                    "size": 3
+                },
+                {
+                    "bubble_id": 5,
+                    "size": 11
+                },
+                {
+                    "bubble_id": 6,
+                    "size": 2
+                },
+                {
+                    "bubble_id": 7,
+                    "size": 10
+                },
+                {
+                    "bubble_id": 8,
+                    "size": 8
+                },
+                {
+                    "bubble_id": 9,
+                    "size": 2
+                },
+                {
+                    "bubble_id": 10,
+                    "size": 4
+                }
+            ],
+            "isolated_clients": []
+        },
+        {
+            "sequence": 3,
+            "stage": "dynamic_recluster",
+            "round": 20,
+            "k_star": 2,
+            "total_clients": 70,
+            "num_clusters": 2,
+            "num_multi_client_bubbles": 2,
+            "num_isolated_clients": 0,
+            "cluster_sizes": [
+                68,
+                2
+            ],
+            "cluster_size_stats": {
+                "min": 2,
+                "max": 68,
+                "mean": 35.0
+            },
+            "multi_client_bubbles": [
+                {
+                    "bubble_id": 0,
+                    "size": 68
+                },
+                {
+                    "bubble_id": 1,
+                    "size": 2
+                }
+            ],
+            "isolated_clients": []
+        },
+        {
+            "sequence": 4,
+            "stage": "dynamic_recluster",
+            "round": 30,
+            "k_star": 2,
+            "total_clients": 70,
+            "num_clusters": 2,
+            "num_multi_client_bubbles": 2,
+            "num_isolated_clients": 0,
+            "cluster_sizes": [
+                68,
+                2
+            ],
+            "cluster_size_stats": {
+                "min": 2,
+                "max": 68,
+                "mean": 35.0
+            },
+            "multi_client_bubbles": [
+                {
+                    "bubble_id": 0,
+                    "size": 68
+                },
+                {
+                    "bubble_id": 1,
+                    "size": 2
+                }
+            ],
+            "isolated_clients": []
+        },
+        {
+            "sequence": 5,
+            "stage": "dynamic_recluster",
+            "round": 40,
+            "k_star": 12,
+            "total_clients": 70,
+            "num_clusters": 12,
+            "num_multi_client_bubbles": 12,
+            "num_isolated_clients": 0,
+            "cluster_sizes": [
+                3,
+                17,
+                8,
+                7,
+                4,
+                11,
+                6,
+                3,
+                4,
+                3,
+                2,
+                2
+            ],
+            "cluster_size_stats": {
+                "min": 2,
+                "max": 17,
+                "mean": 5.833333333333333
+            },
+            "multi_client_bubbles": [
+                {
+                    "bubble_id": 0,
+                    "size": 3
+                },
+                {
+                    "bubble_id": 1,
+                    "size": 17
+                },
+                {
+                    "bubble_id": 2,
+                    "size": 8
+                },
+                {
+                    "bubble_id": 3,
+                    "size": 7
+                },
+                {
+                    "bubble_id": 4,
+                    "size": 4
+                },
+                {
+                    "bubble_id": 5,
+                    "size": 11
+                },
+                {
+                    "bubble_id": 6,
+                    "size": 6
+                },
+                {
+                    "bubble_id": 7,
+                    "size": 3
+                },
+                {
+                    "bubble_id": 8,
+                    "size": 4
+                },
+                {
+                    "bubble_id": 9,
+                    "size": 3
+                },
+                {
+                    "bubble_id": 10,
+                    "size": 2
+                },
+                {
+                    "bubble_id": 11,
+                    "size": 2
+                }
+            ],
+            "isolated_clients": []
+        },
+        {
+            "sequence": 6,
+            "stage": "dynamic_recluster",
+            "round": 50,
+            "k_star": 4,
+            "total_clients": 70,
+            "num_clusters": 4,
+            "num_multi_client_bubbles": 4,
+            "num_isolated_clients": 0,
+            "cluster_sizes": [
+                58,
+                2,
+                6,
+                4
+            ],
+            "cluster_size_stats": {
+                "min": 2,
+                "max": 58,
+                "mean": 17.5
+            },
+            "multi_client_bubbles": [
+                {
+                    "bubble_id": 0,
+                    "size": 58
+                },
+                {
+                    "bubble_id": 1,
+                    "size": 2
+                },
+                {
+                    "bubble_id": 2,
+                    "size": 6
+                },
+                {
+                    "bubble_id": 3,
+                    "size": 4
+                }
+            ],
+            "isolated_clients": []
+        },
+        {
+            "sequence": 7,
+            "stage": "dynamic_recluster",
+            "round": 60,
+            "k_star": 13,
+            "total_clients": 70,
+            "num_clusters": 13,
+            "num_multi_client_bubbles": 13,
+            "num_isolated_clients": 0,
+            "cluster_sizes": [
+                5,
+                16,
+                15,
+                7,
+                5,
+                3,
+                2,
+                4,
+                5,
+                2,
+                2,
+                2,
+                2
+            ],
+            "cluster_size_stats": {
+                "min": 2,
+                "max": 16,
+                "mean": 5.384615384615385
+            },
+            "multi_client_bubbles": [
+                {
+                    "bubble_id": 0,
+                    "size": 5
+                },
+                {
+                    "bubble_id": 1,
+                    "size": 16
+                },
+                {
+                    "bubble_id": 2,
+                    "size": 15
+                },
+                {
+                    "bubble_id": 3,
+                    "size": 7
+                },
+                {
+                    "bubble_id": 4,
+                    "size": 5
+                },
+                {
+                    "bubble_id": 5,
+                    "size": 3
+                },
+                {
+                    "bubble_id": 6,
+                    "size": 2
+                },
+                {
+                    "bubble_id": 7,
+                    "size": 4
+                },
+                {
+                    "bubble_id": 8,
+                    "size": 5
+                },
+                {
+                    "bubble_id": 9,
+                    "size": 2
+                },
+                {
+                    "bubble_id": 10,
+                    "size": 2
+                },
+                {
+                    "bubble_id": 11,
+                    "size": 2
+                },
+                {
+                    "bubble_id": 12,
+                    "size": 2
+                }
+            ],
+            "isolated_clients": []
+        },
+        {
+            "sequence": 8,
+            "stage": "dynamic_recluster",
+            "round": 70,
+            "k_star": 2,
+            "total_clients": 70,
+            "num_clusters": 2,
+            "num_multi_client_bubbles": 1,
+            "num_isolated_clients": 1,
+            "cluster_sizes": [
+                69,
+                1
+            ],
+            "cluster_size_stats": {
+                "min": 1,
+                "max": 69,
+                "mean": 35.0
+            },
+            "multi_client_bubbles": [
+                {
+                    "bubble_id": 0,
+                    "size": 69
+                }
+            ],
+            "isolated_clients": [
+                "CA_1_HOBBIES_2"
+            ]
+        },
+        {
+            "sequence": 9,
+            "stage": "dynamic_recluster",
+            "round": 80,
+            "k_star": 12,
+            "total_clients": 70,
+            "num_clusters": 12,
+            "num_multi_client_bubbles": 12,
+            "num_isolated_clients": 0,
+            "cluster_sizes": [
+                15,
+                16,
+                4,
+                2,
+                9,
+                4,
+                3,
+                8,
+                2,
+                2,
+                2,
+                3
+            ],
+            "cluster_size_stats": {
+                "min": 2,
+                "max": 16,
+                "mean": 5.833333333333333
+            },
+            "multi_client_bubbles": [
+                {
+                    "bubble_id": 0,
+                    "size": 15
+                },
+                {
+                    "bubble_id": 1,
+                    "size": 16
+                },
+                {
+                    "bubble_id": 2,
+                    "size": 4
+                },
+                {
+                    "bubble_id": 3,
+                    "size": 2
+                },
+                {
+                    "bubble_id": 4,
+                    "size": 9
+                },
+                {
+                    "bubble_id": 5,
+                    "size": 4
+                },
+                {
+                    "bubble_id": 6,
+                    "size": 3
+                },
+                {
+                    "bubble_id": 7,
+                    "size": 8
+                },
+                {
+                    "bubble_id": 8,
+                    "size": 2
+                },
+                {
+                    "bubble_id": 9,
+                    "size": 2
+                },
+                {
+                    "bubble_id": 10,
+                    "size": 2
+                },
+                {
+                    "bubble_id": 11,
+                    "size": 3
+                }
+            ],
+            "isolated_clients": []
+        },
+        {
+            "sequence": 10,
+            "stage": "dynamic_recluster",
+            "round": 90,
+            "k_star": 2,
+            "total_clients": 70,
+            "num_clusters": 2,
+            "num_multi_client_bubbles": 1,
+            "num_isolated_clients": 1,
+            "cluster_sizes": [
+                69,
+                1
+            ],
+            "cluster_size_stats": {
+                "min": 1,
+                "max": 69,
+                "mean": 35.0
+            },
+            "multi_client_bubbles": [
+                {
+                    "bubble_id": 0,
+                    "size": 69
+                }
+            ],
+            "isolated_clients": [
+                "TX_3_FOODS_3"
+            ]
+        }
     ]
 }

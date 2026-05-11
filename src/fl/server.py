@@ -25,6 +25,7 @@ class BubbleServer:
         self.isolated = []
         self.shared_global_weights = None
         self.shared_lstm_weights = None
+        self.clustering_history = []
 
     @staticmethod
     def _copy_parameters(parameters):
@@ -131,20 +132,43 @@ class BubbleServer:
         _emit(f"Loading clustering results from {clustering_json_path}...", logger)
         with open(clustering_json_path, 'r') as f:
             data = json.load(f)
-            
-        assignments = data["assignments"]
-        self.isolated = data["isolated_clients"]
-        
-        # Group into bubbles
-        bubble_dict = {}
-        for cid, cluster_id in assignments.items():
-            if cid in self.isolated:
-                continue
-            if cluster_id not in bubble_dict:
-                bubble_dict[cluster_id] = []
-            bubble_dict[cluster_id].append(cid)
-            
-        self.bubbles = list(bubble_dict.values())
+
+        if "records" in data:
+            self.clustering_history = data["records"]
+            latest_record = self.clustering_history[-1] if self.clustering_history else {}
+            record_bubbles = latest_record.get("multi_client_bubbles", [])
+            if record_bubbles and any("clients" not in bubble for bubble in record_bubbles):
+                raise ValueError(
+                    "Cannot load compact clustering history without per-bubble client membership. "
+                    "Use a clustering file that includes assignments or clients."
+                )
+            self.bubbles = [list(bubble["clients"]) for bubble in record_bubbles]
+            self.isolated = list(latest_record.get("isolated_clients", []))
+        elif "multi_client_bubbles" in data:
+            self.clustering_history = [data]
+            record_bubbles = data.get("multi_client_bubbles", [])
+            if record_bubbles and any("clients" not in bubble for bubble in record_bubbles):
+                raise ValueError(
+                    "Cannot load compact clustering history without per-bubble client membership. "
+                    "Use a clustering file that includes assignments or clients."
+                )
+            self.bubbles = [list(bubble["clients"]) for bubble in record_bubbles]
+            self.isolated = list(data.get("isolated_clients", []))
+        else:
+            assignments = data["assignments"]
+            self.isolated = data["isolated_clients"]
+
+            # Group into bubbles
+            bubble_dict = {}
+            for cid, cluster_id in assignments.items():
+                if cid in self.isolated:
+                    continue
+                if cluster_id not in bubble_dict:
+                    bubble_dict[cluster_id] = []
+                bubble_dict[cluster_id].append(cid)
+
+            self.bubbles = list(bubble_dict.values())
+
         _emit(f"Multi-Client Bubbles: {self.bubbles}", logger)
         _emit(f"Isolated (Single-Client) Bubbles: {self.isolated}", logger)
         
@@ -202,29 +226,97 @@ class BubbleServer:
         print(f"Isolated (Single-Client) Bubbles: {self.isolated}")
         
         # Save clustering results to outputs folder
-        self.save_clustering_results("outputs/clustering_results.json")
+        self.save_clustering_results(
+            "outputs/clustering_results.json",
+            stage="initial_clustering",
+            round_num=0,
+            k_star=k_star,
+            reset_history=True,
+        )
 
-    def save_clustering_results(self, output_path):
+    def _build_clustering_record(
+        self,
+        stage="current",
+        round_num=None,
+        k_star=None,
+        bubbles=None,
+        isolated=None,
+    ):
+        active_bubbles = [list(bubble) for bubble in (bubbles if bubbles is not None else self.bubbles)]
+        isolated_clients = list(isolated if isolated is not None else self.isolated)
+        multi_client_bubbles = [bubble for bubble in active_bubbles if len(bubble) > 1]
+        singleton_clients = [
+            bubble[0]
+            for bubble in active_bubbles
+            if len(bubble) == 1 and bubble[0] not in isolated_clients
+        ]
+        isolated_clients.extend(singleton_clients)
+
+        all_cluster_sizes = [len(bubble) for bubble in multi_client_bubbles] + [1 for _ in isolated_clients]
+        total_clients = sum(all_cluster_sizes)
+        cluster_size_stats = {
+            "min": int(min(all_cluster_sizes)) if all_cluster_sizes else 0,
+            "max": int(max(all_cluster_sizes)) if all_cluster_sizes else 0,
+            "mean": float(np.mean(all_cluster_sizes)) if all_cluster_sizes else 0.0,
+        }
+
+        return {
+            "sequence": len(self.clustering_history) + 1,
+            "stage": stage,
+            "round": round_num,
+            "k_star": int(k_star if k_star is not None else len(all_cluster_sizes)),
+            "total_clients": int(total_clients),
+            "num_clusters": len(all_cluster_sizes),
+            "num_multi_client_bubbles": len(multi_client_bubbles),
+            "num_isolated_clients": len(isolated_clients),
+            "cluster_sizes": all_cluster_sizes,
+            "cluster_size_stats": cluster_size_stats,
+            "multi_client_bubbles": [
+                {
+                    "bubble_id": idx,
+                    "size": len(bubble),
+                }
+                for idx, bubble in enumerate(multi_client_bubbles)
+            ],
+            "isolated_clients": isolated_clients,
+        }
+
+    def save_clustering_results(
+        self,
+        output_path,
+        stage="current",
+        round_num=None,
+        k_star=None,
+        bubbles=None,
+        isolated=None,
+        reset_history=False,
+    ):
         """
-        Saves the current bubble and isolated client assignments to a JSON file.
+        Saves clustering history to a JSON file.
+
+        Client-to-cluster assignment mappings and per-bubble client lists are
+        intentionally omitted to keep the output compact while preserving
+        chronological clustering results.
         """
         import json
         import os
-        
-        assignments = {}
-        for cluster_id, bubble in enumerate(self.bubbles):
-            for cid in bubble:
-                assignments[cid] = cluster_id
-                
-        # For isolated clients, use unique IDs starting after the last bubble ID
-        start_id = len(self.bubbles)
-        for i, cid in enumerate(self.isolated):
-            assignments[cid] = start_id + i
-            
+
+        if reset_history:
+            self.clustering_history = []
+
+        record = self._build_clustering_record(
+            stage=stage,
+            round_num=round_num,
+            k_star=k_star,
+            bubbles=bubbles,
+            isolated=isolated,
+        )
+        self.clustering_history.append(record)
+
         result = {
-            "k_star": len(self.bubbles) + len(self.isolated),
-            "assignments": assignments,
-            "isolated_clients": self.isolated
+            "schema_version": 2,
+            "description": "Chronological clustering records. Client-to-cluster assignments and per-bubble client lists are omitted.",
+            "records": self.clustering_history,
         }
         
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -499,7 +591,14 @@ class BubbleServer:
                     f"[Dynamic Recluster] round={fl_round}, k_star={k_star}, bubbles={active_bubbles}, isolated={isolated}, deployment=cluster_specific",
                     logger,
                 )
-                self.save_clustering_results("outputs/clustering_results.json")
+                self.save_clustering_results(
+                    "outputs/clustering_results.json",
+                    stage="dynamic_recluster",
+                    round_num=fl_round,
+                    k_star=k_star,
+                    bubbles=active_bubbles,
+                    isolated=self.isolated,
+                )
 
 
         if head_finetune_epochs > 0:
