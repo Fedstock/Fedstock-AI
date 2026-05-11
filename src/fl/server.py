@@ -142,6 +142,17 @@ class BubbleServer:
             bubble_groups[label].append(client_ids[idx])
             
         # Separate into multi-client and single-client
+        
+        print(f"Optimal Clusters (k*): {k_star}")
+        
+        # Group client IDs into bubbles
+        bubble_groups = {}
+        for idx, label in enumerate(labels):
+            if label not in bubble_groups:
+                bubble_groups[label] = []
+            bubble_groups[label].append(client_ids[idx])
+            
+        # Separate into multi-client and single-client
         for label, cids in bubble_groups.items():
             if len(cids) > 1:
                 self.bubbles.append(cids)
@@ -151,6 +162,37 @@ class BubbleServer:
         print(f"Multi-Client Bubbles: {self.bubbles}")
         print(f"Isolated (Single-Client) Bubbles: {self.isolated}")
         
+        # Save clustering results to outputs folder
+        self.save_clustering_results("outputs/clustering_results.json")
+
+    def save_clustering_results(self, output_path):
+        """
+        Saves the current bubble and isolated client assignments to a JSON file.
+        """
+        import json
+        import os
+        
+        assignments = {}
+        for cluster_id, bubble in enumerate(self.bubbles):
+            for cid in bubble:
+                assignments[cid] = cluster_id
+                
+        # For isolated clients, use unique IDs starting after the last bubble ID
+        start_id = len(self.bubbles)
+        for i, cid in enumerate(self.isolated):
+            assignments[cid] = start_id + i
+            
+        result = {
+            "k_star": len(self.bubbles) + len(self.isolated),
+            "assignments": assignments,
+            "isolated_clients": self.isolated
+        }
+        
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, 'w') as f:
+            json.dump(result, f, indent=4)
+        print(f"Clustering results saved to {output_path}")
+
     def step_3_federated_learning(
         self,
         num_rounds=3,
@@ -370,6 +412,8 @@ class BubbleServer:
                     f"[Dynamic Recluster] round={fl_round}, k_star={k_star}, bubbles={active_bubbles}, isolated={isolated}",
                     logger,
                 )
+                self.save_clustering_results("outputs/clustering_results.json")
+
 
         if head_finetune_epochs > 0:
             for b_idx, bubble_cids in enumerate(active_bubbles):
