@@ -1,142 +1,156 @@
-# Fedstock-AI: PA-CFL 기반 다중 매장 판매량 예측 시스템
+# Fedstock-AI
 
-**Privacy-Adaptive Clustered Federated Learning** 프레임워크를 활용하여, 이질적인 유통 데이터 환경에서 프라이버시를 보호하면서 최적의 판매량 예측 모델을 구축하는 시스템입니다.
+PA-CFL(Privacy-Adaptive Clustered Federated Learning)를 기반으로 매장별 판매량을 예측하는 실험 파이프라인입니다. SQLite 클라이언트 데이터 소스를 그대로 사용하며, ANOVA 기반 feature selection, 초기 feature clustering, bubble 단위 federated learning, 동적 재클러스터링, isolated client 개인화 학습을 한 번에 실행합니다.
 
----
-
-## 📋 전체 파이프라인 개요
-
-```
-[Step 0] 데이터 로드 & 전처리
-    ↓   SQLite DB에서 매장별 데이터 로드 → RobustScaler 적용 → Sliding Window(14일) 시퀀스 생성
-[Step 1] 피처 중요도 추출 (각 클라이언트)
-    ↓   XGBoost로 피처 중요도 산출 → Gradient Clipping + Laplace 노이즈로 DP 적용 → 서버에 전송
-[Step 2] EMD 기반 클러스터링 (서버)
-    ↓   노이즈 적용된 피처 중요도 분포 간 EMD(Earth Mover's Distance) 거리 행렬 계산
-    ↓   Agglomerative Clustering + DBI로 최적 클러스터 수(k*) 자동 결정
-    ↓   유사 매장끼리 '버블(Bubble)'로 그룹화
-[Step 3] 연합학습 (버블 내 FedAvg)
-    ↓   Global Warmup → 버블별 LSTM Body 공유 학습 → 동적 재클러스터링 → Head Fine-tuning
-[Step 4] 개인화 학습 (고립 클라이언트)
-        고립(Isolated) 매장은 공유 LSTM Body 위에 독립적 Head를 학습
-```
-
----
-
-## ⚙️ 실행 방법
-
-### 전체 파이프라인 (베이스라인 비교 평가 포함)
+## 실행
 
 ```bash
 python run_fl_baselines.py
 ```
 
-- **비교 대상**: Local Training / Global FedAvg / PA-CFL (제안 방식)
-- **결과 출력**: `outputs/evaluation_report.md`, `outputs/baseline_comparison.png`
+실행 시 세 가지 전략을 비교합니다.
 
-### 주요 하이퍼파라미터 (`run_fl_baselines.py` 내부)
+- `Local`: 클라이언트별 독립 학습
+- `Global FedAvg`: 전체 클라이언트를 하나의 글로벌 FedAvg 그룹으로 학습
+- `PA-CFL`: ANOVA feature selection, bubble clustering, shared LSTM 학습, 동적 재클러스터링, head fine-tuning 적용
+
+주요 하이퍼파라미터는 [run_fl_baselines.py](run_fl_baselines.py) 안에서 조정합니다.
 
 | 파라미터 | 기본값 | 설명 |
 | :--- | :---: | :--- |
-| `num_rounds` | 100 | 연합학습 라운드 수 |
-| `epochs_per_round` | 5 | 라운드당 로컬 학습 에포크 수 |
-| `seq_len` | 14 | LSTM 시퀀스 길이 (과거 참조 일수) |
-| `hidden_size` | 32 | LSTM 은닉 유닛 수 |
-| `global_warmup_rounds` | 1 | 전역 워밍업 라운드 수 |
-| `recluster_interval` | 10 | 동적 재클러스터링 주기 (라운드) |
-| `head_finetune_epochs` | 1 | Head 미세 조정 에포크 수 |
+| `num_rounds` | 100 | federated learning 라운드 수 |
+| `epochs_per_round` | 5 | 라운드당 local epoch 수 |
+| `seq_len` | 14 | LSTM 입력 시퀀스 길이 |
+| `global_warmup_rounds` | 1 | 공통 글로벌 warm-up 라운드 수 |
+| `recluster_interval` | 10 | 동적 재클러스터링 주기 |
+| `head_finetune_epochs` | 1 | 개인화 head fine-tuning epoch 수 |
 
----
+## 파이프라인
 
-## 🏗️ 주요 구현 내용
+1. 데이터 로딩
+   - `src/fedstock_data/data/clients/client_*.db`의 SQLite 클라이언트 DB를 사용합니다.
+   - `src.dataset.load_client_data()`가 기존 데이터 소스 선택 방식을 유지합니다.
 
-### 1. PA-CFL (Privacy-Adaptive Clustered Federated Learning)
-- **프라이버시 보호**: 각 매장은 XGBoost 피처 중요도에 Laplace 노이즈를 추가하여 서버에 전송 (ε-차등 정보 보호)
-- **적응형 클러스터링**: EMD 거리 + Agglomerative Clustering으로 유사 매장을 '버블'로 자동 분류
-- **버블 내 연합학습**: FedAvg로 버블 내 모델 파라미터를 가중 평균하여 공유 모델 생성
+2. ANOVA feature selection
+   - 16개 후보 feature에 대해 ANOVA F-score와 p-value를 계산합니다.
+   - `alpha=0.10`, `top_k=12` 기준으로 유의미한 12개 feature를 선택합니다.
+   - 결과는 `outputs/feature_selection.json`에 저장됩니다.
 
-### 2. Lightweight LSTM 아키텍처
-- 매장 POS 기기의 저사양 환경을 고려한 **경량 LSTM** 채택 (기존 논문의 Transformer 대체)
-- 구조: `LSTM(input, hidden=32, layers=1)` → `Linear(hidden, 1)`
-- Body(LSTM)/Head(FC) 분리 설계로 개인화 연합학습에 최적화
+3. 초기 clustering
+   - 각 클라이언트의 noisy feature importance를 수집합니다.
+   - EMD 거리와 Agglomerative Clustering으로 bubble을 구성합니다.
 
-### 3. HuberSMAPE 손실 함수
-- Huber Loss와 SMAPE의 가중 결합으로, 이상치에 강건하면서도 비율 기반 정확도를 동시에 최적화
-- 타겟 스케일러의 center/scale 정보를 활용하여 역스케일 기반 SMAPE를 손실에 직접 반영
+4. PA-CFL 학습
+   - 초기 warm-up에서는 공통 글로벌 모델을 학습합니다.
+   - bubble 내부에서는 shared LSTM body를 FedAvg로 학습하고, output head는 클라이언트별로 유지합니다.
+   - 동적 재클러스터링 이후 다중 클러스터에는 클러스터별 글로벌 모델을 배포합니다.
+   - 공통 글로벌 모델은 계속 업데이트하되, 초기 warm-up과 isolated client에만 배포합니다.
 
----
+5. 결과 저장
+   - 평가 리포트, 시각화, feature selection, clustering history, 모델 가중치, 학습 로그가 `outputs/` 아래에 저장됩니다.
 
-## 🔬 추가 적용 세부 기법
+## Feature Selection 출력
 
-### Body/Head 분리 학습 (Personalized FL)
-- **LSTM Body (공유)**: 버블 내 모든 매장이 공통으로 학습하는 시계열 패턴 인코더
-- **FC Head (개인화)**: 각 매장이 독립적으로 유지하는 출력 레이어
-- `fit_shared_lstm()`: Body만 서버와 동기화, Head는 각 매장이 보존
-- `fit_head()`: Body를 고정하고 Head만 미세 조정
+`outputs/feature_selection.json`은 다음 정보를 포함합니다.
 
-### Global Warmup
-- 클러스터링 이전에 전체 클라이언트로 1~2라운드 글로벌 FedAvg를 수행
-- 모든 버블이 **동일한 전역 기초 지식**에서 출발하여, 소규모 버블의 학습 격리 문제를 해소
+- `candidate_features`: 16개 후보 feature
+- `selected_features`: ANOVA로 선택된 12개 feature
+- `ranked_features`: feature별 `rank`, `f_score`, `p_value`, `significant`, `selected`
+- `selected_significant_count`: 선택된 feature 중 유의성 기준을 통과한 개수
+- `total_samples`, `num_clients`, `client_sample_count_stats`: 계산에 사용된 데이터 요약
 
-### 동적 재클러스터링 (Dynamic Re-clustering)
-- 학습 중 `recluster_interval` 주기마다 각 클라이언트의 **가중치 업데이트 벡터(Delta)**를 수집
-- Delta 벡터 간 유사도를 기반으로 버블을 재구성하여, 학습 과정에서 변화하는 클라이언트 특성을 반영
-
-### 타겟 데이터 스케일링
-- `RobustScaler`를 사용하여 이상치에 강건한 타겟(y) 정규화
-- 학습 데이터로만 fit하여 검증 데이터 누수(Data Leakage)를 방지
-
-### Gradient Clipping 기반 DP
-- 피처 중요도 벡터의 L2 Norm을 `clip_norm`으로 제한하여 민감도(Sensitivity) 상한을 확정
-- 확정된 민감도에 비례하는 Laplace 노이즈를 추가하여 ε-차등 정보 보호를 구현
-
----
-
-## 📂 프로젝트 구조
+현재 선택 feature는 다음과 같습니다.
 
 ```text
-📦 model
- ┣ 📜 run_fl_baselines.py       # 전체 파이프라인 실행 (Local / FedAvg / PA-CFL 비교)
- ┣ 📜 losses.py                 # HuberSMAPE 손실 함수
- ┣ 📂 src
- │ ┣ 📜 dataset.py              # SQLite DB 로드 및 피처 전처리
- │ ┣ 📂 fl                      # 연합학습 핵심 모듈
- │ │ ┣ 📜 client.py             # FedStockClient (Body/Head 분리, 로컬 학습/평가)
- │ │ ┣ 📜 server.py             # BubbleServer (Global Warmup, FedAvg, 동적 재클러스터링)
- │ │ ┣ 📜 server_clustering.py  # EMD 거리 행렬 + Agglomerative Clustering
- │ │ ┣ 📜 privacy.py            # Gradient Clipping DP 기반 노이즈 생성
- │ │ ┗ 📜 extract_features.py   # 독립 실행용 피처 추출 스크립트
- │ ┣ 📂 models
- │ │ ┗ 📜 lstm.py               # Lightweight LSTM 모델
- │ ┗ 📂 fedstock_data/data/clients  # SQLite (.db) 매장별 데이터셋
- ┣ 📂 outputs                   # 학습 결과 및 시각화
- │ ┣ 📜 evaluation_report.md    # 최종 평가 리포트
- │ ┣ 📜 baseline_comparison.png # 전략 비교 시각화
- │ ┣ 📜 clustering_results.json # 클러스터링 결과
- │ ┣ 📜 feature_importances.json # 피처 중요도 결과
- │ ┣ 📜 feature_selection.json  # 피처 선택 결과
- │ ┗ 📂 models                  # 학습된 모델 가중치 (.pt)
- │   ┣ 📂 clients               # 매장별 개인화 모델 (70개)
- │   ┗ 📂 bubbles               # 버블별 공유 Body 모델
-
- ┣ 📂 temp                      # 비필수 파일 (문서, 이전 스크립트 등)
- ┗ 📜 README.md
+rolling_mean_28, rolling_mean_7, rolling_std_28, lag_7,
+rolling_std_7, lag_14, lag_28, sell_price,
+is_month_end, is_month_start, is_holiday, month
 ```
 
----
+## Clustering 출력
 
-## 🛠 기술 스택
+`outputs/clustering_results.json`은 최종 결과만 덮어쓰지 않고, 초기 clustering과 모든 동적 재클러스터링 결과를 `records` 배열에 순서대로 저장합니다.
 
-| 분류 | 기술 |
+파일 크기를 줄이기 위해 클라이언트별 assignment와 다중 bubble의 클라이언트 목록은 생략합니다. 대신 다음 요약을 제공합니다.
+
+- `sequence`, `stage`, `round`
+- `k_star`, `num_clusters`
+- `cluster_sizes`, `cluster_size_stats`
+- `num_multi_client_bubbles`, `num_isolated_clients`
+- `isolated_clients`
+
+## 디렉토리 구조
+
+최상위 폴더에는 실행 진입점과 문서만 두고, 코드와 산출물은 하위 폴더로 분리합니다.
+
+```text
+model/
+├─ .gitignore
+├─ README.md
+├─ run_fl_baselines.py
+├─ src/
+│  ├─ dataset.py
+│  ├─ losses.py
+│  ├─ fl/
+│  │  ├─ client.py
+│  │  ├─ extract_features.py
+│  │  ├─ privacy.py
+│  │  ├─ server.py
+│  │  └─ server_clustering.py
+│  ├─ models/
+│  │  └─ lstm.py
+│  └─ fedstock_data/
+│     └─ data/
+│        └─ clients/
+│           └─ client_*.db
+├─ outputs/
+│  ├─ baseline_comparison.png
+│  ├─ clustering_results.json
+│  ├─ evaluation_report.md
+│  ├─ feature_importances.json
+│  ├─ feature_selection.json
+│  ├─ logs/
+│  │  └─ training_full.log
+│  └─ models/
+│     ├─ bubbles/
+│     └─ clients/
+└─ temp/
+   └─ reference and experiment scratch files
+```
+
+## 주요 모듈
+
+- `src/dataset.py`: SQLite/CSV/parquet 데이터 로딩, 후보 feature 정의, scaling
+- `src/losses.py`: `HuberSMAPELoss`
+- `src/models/lstm.py`: Lightweight LSTM 모델
+- `src/fl/client.py`: `FedStockClient`, shared LSTM/body-head 분리 학습
+- `src/fl/server.py`: PA-CFL orchestration, warm-up, bubble FedAvg, 동적 재클러스터링, 결과 저장
+- `src/fl/server_clustering.py`: EMD 거리와 Agglomerative Clustering
+- `src/fl/extract_features.py`: ANOVA feature selection과 noisy feature importance 추출
+- `src/fl/privacy.py`: XGBoost importance와 Laplace noise 기반 DP 처리
+
+## 산출물
+
+| 경로 | 설명 |
 | :--- | :--- |
-| **Language** | Python 3.12+ |
-| **Deep Learning** | PyTorch (CUDA 12.x+) |
-| **Feature Extraction** | XGBoost |
-| **Data Processing** | Pandas, NumPy, Scikit-learn, SQLite3 |
-| **FL Framework** | Custom PA-CFL BubbleServer + Flower (flwr) |
+| `outputs/evaluation_report.md` | 전략별 최종 RMSE/SMAPE 요약 |
+| `outputs/baseline_comparison.png` | 전략별 성능 비교 차트 |
+| `outputs/feature_selection.json` | ANOVA feature selection 결과 |
+| `outputs/feature_importances.json` | 클라이언트별 noisy feature importance |
+| `outputs/clustering_results.json` | 초기 및 동적 clustering history |
+| `outputs/models/clients/` | 클라이언트별 최종 모델 |
+| `outputs/models/bubbles/` | bubble별 shared LSTM body |
+| `outputs/logs/training_full.log` | 전체 학습 로그 |
 
----
+## 의존성
 
-## 📝 참고 문헌
-- Privacy-Adaptive Clustered Federated Learning for Transformer-Based Sales Forecasting on Heterogeneous Retail Data (기반 논문)
-- M5 Forecasting - Accuracy (Kaggle Dataset)
+주요 패키지는 다음과 같습니다.
+
+- Python 3.12+
+- PyTorch
+- NumPy, Pandas, Scikit-learn
+- Matplotlib
+- Flower(`flwr`)
+- XGBoost
+
+ANOVA feature selection은 Scikit-learn만 필요합니다. XGBoost는 noisy feature importance 추출 경로에서 사용됩니다.

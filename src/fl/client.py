@@ -1,7 +1,7 @@
 import flwr as fl
 import torch
 from collections import OrderedDict
-from losses import HuberSMAPELoss
+from src.losses import HuberSMAPELoss
 from src.models.lstm import LightweightLSTM
 from src.fl.privacy import get_noisy_feature_importance
 

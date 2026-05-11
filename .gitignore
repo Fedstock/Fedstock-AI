@@ -31,8 +31,7 @@ temp/
 *.pdf
 
 # Models and data
-*.pth
-*.ckpt
+*.log
 fedstock_data/
 
 # IDEs and Editors
