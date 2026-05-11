@@ -1,6 +1,8 @@
 import numpy as np
 import flwr as fl
 import torch
+import os
+from concurrent.futures import ThreadPoolExecutor
 from src.fl.server_clustering import perform_clustering
 
 def _emit(message, logger=None):
@@ -74,18 +76,26 @@ class BubbleServer:
             f"[Shared Global] warmup_rounds={global_warmup_rounds}, clients={client_ids}",
             logger,
         )
-        for warmup_round in range(1, global_warmup_rounds + 1):
-            round_weights = []
-            round_samples = []
-            for cid in client_ids:
-                updated_weights, num_samples, _ = self.clients[cid].fit(
-                    parameters=global_weights,
-                    config={"epochs": epochs_per_round},
-                )
-                round_weights.append(updated_weights)
-                round_samples.append(num_samples)
-            global_weights = self._fedavg(round_weights, round_samples)
-            _emit(f"[Shared Global] warmup round {warmup_round}/{global_warmup_rounds} complete", logger)
+        
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            for warmup_round in range(1, global_warmup_rounds + 1):
+                futures = []
+                for cid in client_ids:
+                    futures.append(executor.submit(
+                        self.clients[cid].fit,
+                        parameters=global_weights,
+                        config={"epochs": epochs_per_round}
+                    ))
+                
+                round_weights = []
+                round_samples = []
+                for future in futures:
+                    updated_weights, num_samples, _ = future.result()
+                    round_weights.append(updated_weights)
+                    round_samples.append(num_samples)
+                    
+                global_weights = self._fedavg(round_weights, round_samples)
+                _emit(f"[Shared Global] warmup round {warmup_round}/{global_warmup_rounds} complete", logger)
         return self._copy_parameters(global_weights)
         
     def load_clustering_results(self, clustering_json_path, logger=None):
@@ -279,37 +289,41 @@ class BubbleServer:
                 round_weights = []
                 round_samples = []
                 
-                for cid in bubble_cids:
-                    client = self.clients[cid]
-                    if personalize_head:
-                        updated_weights, num_samples, _ = client.fit_shared_lstm(
-                            parameters=global_weights,
-                            config={"epochs": epochs_per_round}
-                        )
-                    else:
-                        updated_weights, num_samples, _ = client.fit(
-                            parameters=global_weights,
-                            config={"epochs": epochs_per_round}
-                        )
-                    round_weights.append(updated_weights)
-                    round_samples.append(num_samples)
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = []
+                    for cid in bubble_cids:
+                        client = self.clients[cid]
+                        if personalize_head:
+                            futures.append(executor.submit(client.fit_shared_lstm, parameters=global_weights, config={"epochs": epochs_per_round}))
+                        else:
+                            futures.append(executor.submit(client.fit, parameters=global_weights, config={"epochs": epochs_per_round}))
+                    
+                    for future in futures:
+                        updated_weights, num_samples, _ = future.result()
+                        round_weights.append(updated_weights)
+                        round_samples.append(num_samples)
                     
                 # 2. Aggregate using FedAvg
                 total_samples = sum(round_samples)
                 global_weights = self._fedavg(round_weights, round_samples)
                 
-                # 3. Evaluate on clients
+                # 3. Evaluate on clients (can also be parallelized)
                 total_rmse = 0.0
                 total_smape = 0.0
                 
-                for cid in bubble_cids:
-                    client = self.clients[cid]
-                    if personalize_head:
-                        _, _, metrics = client.evaluate_shared_lstm(parameters=global_weights, config={})
-                    else:
-                        _, _, metrics = client.evaluate(parameters=global_weights, config={})
-                    total_rmse += metrics["rmse"] * round_samples[bubble_cids.index(cid)]
-                    total_smape += metrics["smape"] * round_samples[bubble_cids.index(cid)]
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    eval_futures = []
+                    for cid in bubble_cids:
+                        client = self.clients[cid]
+                        if personalize_head:
+                            eval_futures.append(executor.submit(client.evaluate_shared_lstm, parameters=global_weights, config={}))
+                        else:
+                            eval_futures.append(executor.submit(client.evaluate, parameters=global_weights, config={}))
+                    
+                    for idx, future in enumerate(eval_futures):
+                        _, _, metrics = future.result()
+                        total_rmse += metrics["rmse"] * round_samples[idx]
+                        total_smape += metrics["smape"] * round_samples[idx]
                     
                 avg_rmse = total_rmse / total_samples
                 avg_smape = total_smape / total_samples
@@ -330,28 +344,31 @@ class BubbleServer:
                 )
 
             if personalize_head and head_finetune_epochs > 0:
-                for cid in bubble_cids:
-                    client = self.clients[cid]
-                    updated_weights, num_samples, _ = client.fit_head(
-                        parameters=global_weights,
-                        config={"epochs": head_finetune_epochs},
-                    )
-                    _, _, metrics = client.evaluate(parameters=updated_weights, config={})
-                    history.append(
-                        {
-                            "stage": "head_finetune",
-                            "bubble": b_idx,
-                            "client": cid,
-                            "epochs": head_finetune_epochs,
-                            "num_samples": int(num_samples),
-                            "rmse": metrics["rmse"],
-                            "smape": metrics["smape"],
-                        }
-                    )
-                    _emit(
-                        f"    -> Client {cid} personalized head metrics: RMSE={metrics['rmse']:.4f}, SMAPE={metrics['smape']:.4f}",
-                        logger,
-                    )
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    finetune_futures = []
+                    for cid in bubble_cids:
+                        client = self.clients[cid]
+                        finetune_futures.append(executor.submit(client.fit_head, parameters=global_weights, config={"epochs": head_finetune_epochs}))
+                    
+                    for idx, future in enumerate(finetune_futures):
+                        updated_weights, num_samples, _ = future.result()
+                        cid = bubble_cids[idx]
+                        _, _, metrics = self.clients[cid].evaluate(parameters=updated_weights, config={})
+                        history.append(
+                            {
+                                "stage": "head_finetune",
+                                "bubble": b_idx,
+                                "client": cid,
+                                "epochs": head_finetune_epochs,
+                                "num_samples": int(num_samples),
+                                "rmse": metrics["rmse"],
+                                "smape": metrics["smape"],
+                            }
+                        )
+                        _emit(
+                            f"    -> Client {cid} personalized head metrics: RMSE={metrics['rmse']:.4f}, SMAPE={metrics['smape']:.4f}",
+                            logger,
+                        )
 
         _emit("\nFL Training Complete.", logger)
         return history
@@ -382,17 +399,21 @@ class BubbleServer:
                 global_weights = common_weights[b_idx]
                 round_weights = []
                 round_samples = []
-                for cid in bubble_cids:
-                    client = self.clients[cid]
-                    updated_weights, num_samples, _ = client.fit_shared_lstm(
-                        parameters=global_weights,
-                        config={"epochs": epochs_per_round},
-                    )
-                    round_weights.append(updated_weights)
-                    round_samples.append(num_samples)
-                    latest_update_vectors[cid] = self._flatten_delta(updated_weights, global_weights)
-                    latest_client_weights[cid] = updated_weights
-                    latest_client_samples[cid] = num_samples
+                
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = []
+                    for cid in bubble_cids:
+                        client = self.clients[cid]
+                        futures.append(executor.submit(client.fit_shared_lstm, parameters=global_weights, config={"epochs": epochs_per_round}))
+                    
+                    for idx, future in enumerate(futures):
+                        cid = bubble_cids[idx]
+                        updated_weights, num_samples, _ = future.result()
+                        round_weights.append(updated_weights)
+                        round_samples.append(num_samples)
+                        latest_update_vectors[cid] = self._flatten_delta(updated_weights, global_weights)
+                        latest_client_weights[cid] = updated_weights
+                        latest_client_samples[cid] = num_samples
 
                 aggregated_weights = self._fedavg(round_weights, round_samples)
                 next_common_weights[b_idx] = aggregated_weights
@@ -400,13 +421,16 @@ class BubbleServer:
                 total_rmse = 0.0
                 total_smape = 0.0
                 total_samples = sum(round_samples)
-                for cid, num_samples in zip(bubble_cids, round_samples):
-                    _, _, metrics = self.clients[cid].evaluate_shared_lstm(
-                        parameters=aggregated_weights,
-                        config={},
-                    )
-                    total_rmse += metrics["rmse"] * num_samples
-                    total_smape += metrics["smape"] * num_samples
+                
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    eval_futures = []
+                    for cid in bubble_cids:
+                        eval_futures.append(executor.submit(self.clients[cid].evaluate_shared_lstm, parameters=aggregated_weights, config={}))
+                    
+                    for idx, future in enumerate(eval_futures):
+                        _, _, metrics = future.result()
+                        total_rmse += metrics["rmse"] * round_samples[idx]
+                        total_smape += metrics["smape"] * round_samples[idx]
 
                 history.append(
                     {
@@ -453,28 +477,32 @@ class BubbleServer:
         if head_finetune_epochs > 0:
             for b_idx, bubble_cids in enumerate(active_bubbles):
                 global_weights = common_weights[b_idx]
-                for cid in bubble_cids:
-                    client = self.clients[cid]
-                    updated_weights, num_samples, _ = client.fit_head(
-                        parameters=global_weights,
-                        config={"epochs": head_finetune_epochs},
-                    )
-                    _, _, metrics = client.evaluate(parameters=updated_weights, config={})
-                    history.append(
-                        {
-                            "stage": "head_finetune",
-                            "bubble": b_idx,
-                            "client": cid,
-                            "epochs": head_finetune_epochs,
-                            "num_samples": int(num_samples),
-                            "rmse": metrics["rmse"],
-                            "smape": metrics["smape"],
-                        }
-                    )
-                    _emit(
-                        f"    -> Client {cid} personalized head metrics: RMSE={metrics['rmse']:.4f}, SMAPE={metrics['smape']:.4f}",
-                        logger,
-                    )
+                
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    finetune_futures = []
+                    for cid in bubble_cids:
+                        client = self.clients[cid]
+                        finetune_futures.append(executor.submit(client.fit_head, parameters=global_weights, config={"epochs": head_finetune_epochs}))
+                    
+                    for idx, future in enumerate(finetune_futures):
+                        cid = bubble_cids[idx]
+                        updated_weights, num_samples, _ = future.result()
+                        _, _, metrics = self.clients[cid].evaluate(parameters=updated_weights, config={})
+                        history.append(
+                            {
+                                "stage": "head_finetune",
+                                "bubble": b_idx,
+                                "client": cid,
+                                "epochs": head_finetune_epochs,
+                                "num_samples": int(num_samples),
+                                "rmse": metrics["rmse"],
+                                "smape": metrics["smape"],
+                            }
+                        )
+                        _emit(
+                            f"    -> Client {cid} personalized head metrics: RMSE={metrics['rmse']:.4f}, SMAPE={metrics['smape']:.4f}",
+                            logger,
+                        )
 
         self.bubbles = [bubble for bubble in active_bubbles if len(bubble) > 1]
         self.isolated = []
@@ -491,28 +519,24 @@ class BubbleServer:
             
         _emit("\n--- PA-CFL Step 4: Personalized Learning for Isolated Clients ---", logger)
         history = []
-        for cid in self.isolated:
-            if cid not in self.clients:
-                continue
+        
+        def train_client(cid):
             _emit(f"\n[Personalized] Starting local training for client: {cid}", logger)
             client = self.clients[cid]
-            
-            # Start isolated bubbles from the same shared LSTM and fine-tune only the local head.
             if self.shared_lstm_weights is None:
                 current_weights = client.get_parameters({})
                 updated_weights, num_samples, _ = client.fit(
                     parameters=current_weights,
                     config={"epochs": epochs}
                 )
-                _, _, metrics = client.evaluate(parameters=updated_weights, config={})
             else:
                 current_weights = self._copy_parameters(self.shared_lstm_weights)
                 updated_weights, num_samples, _ = client.fit_head(
                     parameters=current_weights,
                     config={"epochs": epochs}
                 )
-                _, _, metrics = client.evaluate(parameters=updated_weights, config={})
-            result = {
+            _, _, metrics = client.evaluate(parameters=updated_weights, config={})
+            return {
                 "stage": "personalized",
                 "client": cid,
                 "epochs": epochs,
@@ -520,10 +544,18 @@ class BubbleServer:
                 "rmse": metrics["rmse"],
                 "smape": metrics["smape"],
             }
-            history.append(result)
-            _emit(
-                f"    -> Client {cid} metrics after {epochs} epochs: RMSE={metrics['rmse']:.4f}, SMAPE={metrics['smape']:.4f}",
-                logger,
-            )
+
+        from concurrent.futures import as_completed
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(train_client, cid): cid for cid in self.isolated}
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    _emit(
+                        f"    -> Client {result['client']} metrics after {epochs} epochs: RMSE={result['rmse']:.4f}, SMAPE={result['smape']:.4f}",
+                        logger,
+                    )
+                    history.append(result)
 
         return history
+

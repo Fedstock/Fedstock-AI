@@ -27,7 +27,9 @@ class LightweightLSTM(nn.Module):
         c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
         
         # Forward propagate LSTM
+        self.lstm.flatten_parameters()
         out, _ = self.lstm(x, (h0, c0))
+
         
         # Decode the hidden state of the last time step
         # out shape: (batch_size, seq_len, hidden_size)

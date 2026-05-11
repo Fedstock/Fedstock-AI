@@ -26,18 +26,14 @@ venv/
 ENV/
 
 # Temporary files created during extraction
-extracted_text.txt
-extracted_text_utf8.txt
-extracted_pacfl.txt
-extract_pdfs.py
+temp/
+*.txt
 *.pdf
 
 # Models and data
-*.pt
 *.pth
 *.ckpt
-data/
-src/
+fedstock_data/
 
 # IDEs and Editors
 .vscode/
@@ -53,9 +49,6 @@ src/
 .Trashes
 ehthumbs.db
 Thumbs.db
-
-# Non-essential / archived files
-temp/
 
 # Documentation
 *.md

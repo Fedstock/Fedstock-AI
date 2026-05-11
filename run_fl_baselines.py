@@ -27,11 +27,12 @@ def setup_client(client_id, data_dir, seq_len=14):
     print(f"Loading data for {client_id}...")
     X_scaled, y_raw, scaler = load_client_data(client_id, data_dir=data_dir)
     
-    # Use subset for faster evaluation but large enough
-    max_samples = 5000 
-    if len(X_scaled) > max_samples:
-        X_scaled = X_scaled[-max_samples:]
-        y_raw = y_raw[-max_samples:]
+    # Use all samples for the entire dataset
+    # max_samples = 5000 
+    # if len(X_scaled) > max_samples:
+    #     X_scaled = X_scaled[-max_samples:]
+    #     y_raw = y_raw[-max_samples:]
+
         
     split_idx = int(len(X_scaled) * 0.8)
     
@@ -58,8 +59,9 @@ def setup_client(client_id, data_dir, seq_len=14):
     X_val_tensor = torch.tensor(X_val_seq, dtype=torch.float32)
     y_val_tensor = torch.tensor(y_val_seq, dtype=torch.float32).unsqueeze(-1)
     
-    train_loader = DataLoader(TensorDataset(X_train_tensor, y_train_tensor), batch_size=256, shuffle=True)
-    val_loader = DataLoader(TensorDataset(X_val_tensor, y_val_tensor), batch_size=256, shuffle=False)
+    train_loader = DataLoader(TensorDataset(X_train_tensor, y_train_tensor), batch_size=1024, shuffle=True)
+    val_loader = DataLoader(TensorDataset(X_val_tensor, y_val_tensor), batch_size=1024, shuffle=False)
+
     
     # Input size is number of features
     input_size = X_train.shape[1]
