@@ -51,7 +51,7 @@
         {
             "rank": 1,
             "feature": "rolling_mean_28",
-            "f_score": 170517.35698259002,
+            "f_score": 170517.3569825892,
             "p_value": 0.0,
             "significant": true,
             "selected": true
@@ -67,7 +67,7 @@
         {
             "rank": 3,
             "feature": "rolling_std_28",
-            "f_score": 92363.09222504108,
+            "f_score": 92363.09222504117,
             "p_value": 0.0,
             "significant": true,
             "selected": true
@@ -75,7 +75,7 @@
         {
             "rank": 4,
             "feature": "lag_7",
-            "f_score": 88317.44304374699,
+            "f_score": 88317.44304374713,
             "p_value": 0.0,
             "significant": true,
             "selected": true
@@ -83,7 +83,7 @@
         {
             "rank": 5,
             "feature": "rolling_std_7",
-            "f_score": 82867.89553726114,
+            "f_score": 82867.89553726107,
             "p_value": 0.0,
             "significant": true,
             "selected": true
@@ -91,7 +91,7 @@
         {
             "rank": 6,
             "feature": "lag_14",
-            "f_score": 75574.32468478238,
+            "f_score": 75574.32468478227,
             "p_value": 0.0,
             "significant": true,
             "selected": true
@@ -99,7 +99,7 @@
         {
             "rank": 7,
             "feature": "lag_28",
-            "f_score": 65926.31824010574,
+            "f_score": 65926.31824010541,
             "p_value": 0.0,
             "significant": true,
             "selected": true
@@ -107,72 +107,72 @@
         {
             "rank": 8,
             "feature": "sell_price",
-            "f_score": 468.85023668166207,
-            "p_value": 5.955359295777935e-104,
+            "f_score": 468.85023668166394,
+            "p_value": 5.955359292255648e-104,
             "significant": true,
             "selected": true
         },
         {
             "rank": 9,
             "feature": "is_month_end",
-            "f_score": 47.609254849090576,
-            "p_value": 5.204658684581782e-12,
+            "f_score": 47.60925484909056,
+            "p_value": 5.2046586816786544e-12,
             "significant": true,
             "selected": true
         },
         {
             "rank": 10,
             "feature": "is_month_start",
-            "f_score": 43.99285215995035,
-            "p_value": 3.297089773754958e-11,
+            "f_score": 43.992852159950225,
+            "p_value": 3.2970897718131717e-11,
             "significant": true,
             "selected": true
         },
         {
             "rank": 11,
             "feature": "is_holiday",
-            "f_score": 8.264272267040216,
-            "p_value": 0.004043353931762006,
+            "f_score": 8.26427226704028,
+            "p_value": 0.004043353929755514,
             "significant": true,
             "selected": true
         },
         {
             "rank": 12,
             "feature": "month",
-            "f_score": 3.4408147974702104,
-            "p_value": 0.06360455047793184,
+            "f_score": 3.4408147974702366,
+            "p_value": 0.06360455044921426,
             "significant": true,
             "selected": true
         },
         {
             "rank": 13,
             "feature": "price_change_rate",
-            "f_score": 0.9817381978615919,
-            "p_value": 0.3217702390733274,
+            "f_score": 0.981738197861431,
+            "p_value": 0.32177023944844174,
             "significant": false,
             "selected": false
         },
         {
             "rank": 14,
             "feature": "week_of_year",
-            "f_score": 0.7427468490389899,
-            "p_value": 0.3887825461154392,
+            "f_score": 0.7427468490389993,
+            "p_value": 0.38878254640362286,
             "significant": false,
             "selected": false
         },
         {
             "rank": 15,
             "feature": "is_weekend",
-            "f_score": 0.040127881153368315,
-            "p_value": 0.8412307858771572,
+            "f_score": 0.04012788115337004,
+            "p_value": 0.841230786029109,
             "significant": false,
             "selected": false
         },
         {
             "rank": 16,
             "feature": "dayofweek",
-            "f_score": 0.01395140620679416,
-            "p_value": 0.9059757086002682,
+            "f_score": 0.01395140620679405,
+            "p_value": 0.9059757090202605,
             "significant": false,
             "selected": false
         }

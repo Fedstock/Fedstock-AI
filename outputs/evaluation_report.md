@@ -5,6 +5,6 @@
 - **Epochs per round:** 5
 
 ## Results
-- **Local**: RMSE = 33.9612, SMAPE = 64.7256
-- **Global FedAvg**: RMSE = 29.5730, SMAPE = 56.8955
-- **PA-CFL**: RMSE = 28.9743, SMAPE = 56.0856
+- **Local**: RMSE = 34.7600, SMAPE = 64.5891
+- **Global FedAvg**: RMSE = 29.4995, SMAPE = 56.8708
+- **PA-CFL**: RMSE = 28.7147, SMAPE = 55.8732
