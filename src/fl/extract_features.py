@@ -10,7 +10,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(current_dir))
 sys.path.append(project_root)
 
-from src.dataset import CANDIDATE_FEATURE_COLS, load_client_data
+from src.dataset import CANDIDATE_FEATURE_COLS, load_client_data, make_group_time_split_indices
 
 
 def _sanitize_anova_values(f_scores, p_values):
@@ -27,10 +27,14 @@ def compute_anova_feature_selection(
     alpha=0.10,
     max_samples_per_client=None,
     random_state=42,
+    train_ratio=0.7,
+    val_ratio=0.15,
 ):
     """
-    Select significant sales predictors with ANOVA F-scores over the existing
-    client data source used by load_client_data.
+    Select significant sales predictors with ANOVA F-scores.
+
+    Feature selection is fit on train rows only. This keeps validation/test
+    targets from influencing which predictors are available to the models.
     """
     candidate_features = list(candidate_features or CANDIDATE_FEATURE_COLS)
     rng = np.random.default_rng(random_state)
@@ -42,11 +46,21 @@ def compute_anova_feature_selection(
     print(f"Candidate features: {len(candidate_features)}, selecting top {top_k}")
 
     for client_id in clients:
-        X, y, _ = load_client_data(
+        X, y, _, metadata = load_client_data(
             client_id,
             data_dir=data_dir,
             feature_cols=candidate_features,
+            scale=False,
+            return_metadata=True,
         )
+        split_indices = make_group_time_split_indices(
+            metadata["item_id"],
+            train_ratio=train_ratio,
+            val_ratio=val_ratio,
+        )
+        train_indices = split_indices["train"]
+        X = X[train_indices]
+        y = y[train_indices]
 
         if max_samples_per_client is not None and len(X) > max_samples_per_client:
             indices = rng.choice(len(X), max_samples_per_client, replace=False)
@@ -100,6 +114,10 @@ def compute_anova_feature_selection(
         "selected_significant_count": sum(
             1 for idx in selected_ranked_indices if p_values[idx] <= alpha
         ),
+        "data_scope": "train split only",
+        "train_ratio": float(train_ratio),
+        "val_ratio": float(val_ratio),
+        "test_ratio": float(max(0.0, 1.0 - train_ratio - val_ratio)),
         "total_samples": int(len(y_all)),
         "num_clients": len(client_sample_counts),
         "client_sample_count_stats": {

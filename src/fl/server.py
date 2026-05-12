@@ -16,11 +16,12 @@ class BubbleServer:
     """
     Simulates the central server orchestrating PA-CFL.
     """
-    def __init__(self, clients_dict):
+    def __init__(self, clients_dict, output_dir="outputs"):
         """
         clients_dict: dict of {client_id: FedStockClient instance}
         """
         self.clients = clients_dict
+        self.output_dir = output_dir
         self.bubbles = []
         self.isolated = []
         self.shared_global_weights = None
@@ -191,10 +192,11 @@ class BubbleServer:
         import numpy as np
         
         importance_dict = {cid: imp.tolist() for cid, imp in zip(client_ids, noisy_importances)}
-        os.makedirs("outputs", exist_ok=True)
-        with open("outputs/feature_importances.json", 'w') as f:
+        os.makedirs(self.output_dir, exist_ok=True)
+        importance_path = os.path.join(self.output_dir, "feature_importances.json")
+        with open(importance_path, 'w') as f:
             json.dump(importance_dict, f, indent=4)
-        print("Feature importances saved to outputs/feature_importances.json")
+        print(f"Feature importances saved to {importance_path}")
 
         noisy_importances = np.array(noisy_importances)
         labels, k_star, _, _ = perform_clustering(
@@ -227,7 +229,7 @@ class BubbleServer:
         
         # Save clustering results to outputs folder
         self.save_clustering_results(
-            "outputs/clustering_results.json",
+            os.path.join(self.output_dir, "clustering_results.json"),
             stage="initial_clustering",
             round_num=0,
             k_star=k_star,
@@ -250,7 +252,7 @@ class BubbleServer:
             for bubble in active_bubbles
             if len(bubble) == 1 and bubble[0] not in isolated_clients
         ]
-        isolated_clients.extend(singleton_clients)
+        isolated_clients = list(dict.fromkeys(isolated_clients + singleton_clients))
 
         all_cluster_sizes = [len(bubble) for bubble in multi_client_bubbles] + [1 for _ in isolated_clients]
         total_clients = sum(all_cluster_sizes)
@@ -259,6 +261,14 @@ class BubbleServer:
             "max": int(max(all_cluster_sizes)) if all_cluster_sizes else 0,
             "mean": float(np.mean(all_cluster_sizes)) if all_cluster_sizes else 0.0,
         }
+
+        assignments = {}
+        for idx, bubble in enumerate(multi_client_bubbles):
+            for cid in bubble:
+                assignments[cid] = idx
+        isolated_offset = len(multi_client_bubbles)
+        for idx, cid in enumerate(isolated_clients):
+            assignments[cid] = isolated_offset + idx
 
         return {
             "sequence": len(self.clustering_history) + 1,
@@ -275,10 +285,12 @@ class BubbleServer:
                 {
                     "bubble_id": idx,
                     "size": len(bubble),
+                    "clients": list(bubble),
                 }
                 for idx, bubble in enumerate(multi_client_bubbles)
             ],
             "isolated_clients": isolated_clients,
+            "assignments": assignments,
         }
 
     def save_clustering_results(
@@ -294,9 +306,8 @@ class BubbleServer:
         """
         Saves clustering history to a JSON file.
 
-        Client-to-cluster assignment mappings and per-bubble client lists are
-        intentionally omitted to keep the output compact while preserving
-        chronological clustering results.
+        Full client membership is included so each run can be audited and
+        reproduced without relying on interleaved console logs.
         """
         import json
         import os
@@ -314,8 +325,8 @@ class BubbleServer:
         self.clustering_history.append(record)
 
         result = {
-            "schema_version": 2,
-            "description": "Chronological clustering records. Client-to-cluster assignments and per-bubble client lists are omitted.",
+            "schema_version": 3,
+            "description": "Chronological clustering records with per-bubble clients and client-to-cluster assignments.",
             "records": self.clustering_history,
         }
         
@@ -421,12 +432,14 @@ class BubbleServer:
                         round_samples.append(num_samples)
                     
                 # 2. Aggregate using FedAvg
-                total_samples = sum(round_samples)
+                total_train_samples = sum(round_samples)
                 global_weights = self._fedavg(round_weights, round_samples)
                 
                 # 3. Evaluate on clients (can also be parallelized)
                 total_rmse = 0.0
                 total_smape = 0.0
+                total_eval_samples = 0
+                per_client_metrics = []
                 
                 with ThreadPoolExecutor(max_workers=4) as executor:
                     eval_futures = []
@@ -438,21 +451,34 @@ class BubbleServer:
                             eval_futures.append(executor.submit(client.evaluate, parameters=global_weights, config={}))
                     
                     for idx, future in enumerate(eval_futures):
-                        _, _, metrics = future.result()
-                        total_rmse += metrics["rmse"] * round_samples[idx]
-                        total_smape += metrics["smape"] * round_samples[idx]
+                        cid = bubble_cids[idx]
+                        _, eval_samples, metrics = future.result()
+                        total_rmse += metrics["rmse"] * eval_samples
+                        total_smape += metrics["smape"] * eval_samples
+                        total_eval_samples += eval_samples
+                        per_client_metrics.append(
+                            {
+                                "client": cid,
+                                "num_samples": int(eval_samples),
+                                "train_samples": int(round_samples[idx]),
+                                "rmse": float(metrics["rmse"]),
+                                "smape": float(metrics["smape"]),
+                            }
+                        )
                     
-                avg_rmse = total_rmse / total_samples
-                avg_smape = total_smape / total_samples
+                avg_rmse = total_rmse / total_eval_samples
+                avg_smape = total_smape / total_eval_samples
                 
                 metrics = {
                     "stage": "federated",
                     "bubble": b_idx,
                     "clients": bubble_cids,
                     "round": fl_round,
-                    "num_samples": int(total_samples),
+                    "num_samples": int(total_eval_samples),
+                    "train_samples": int(total_train_samples),
                     "rmse": float(avg_rmse),
                     "smape": float(avg_smape),
+                    "per_client_metrics": per_client_metrics,
                 }
                 history.append(metrics)
                 _emit(
@@ -468,16 +494,17 @@ class BubbleServer:
                         finetune_futures.append(executor.submit(client.fit_head, parameters=global_weights, config={"epochs": head_finetune_epochs}))
                     
                     for idx, future in enumerate(finetune_futures):
-                        updated_weights, num_samples, _ = future.result()
+                        updated_weights, train_samples, _ = future.result()
                         cid = bubble_cids[idx]
-                        _, _, metrics = self.clients[cid].evaluate(parameters=updated_weights, config={})
+                        _, eval_samples, metrics = self.clients[cid].evaluate(parameters=updated_weights, config={})
                         history.append(
                             {
                                 "stage": "head_finetune",
                                 "bubble": b_idx,
                                 "client": cid,
                                 "epochs": head_finetune_epochs,
-                                "num_samples": int(num_samples),
+                                "num_samples": int(eval_samples),
+                                "train_samples": int(train_samples),
                                 "rmse": metrics["rmse"],
                                 "smape": metrics["smape"],
                             }
@@ -537,7 +564,9 @@ class BubbleServer:
 
                 total_rmse = 0.0
                 total_smape = 0.0
-                total_samples = sum(round_samples)
+                total_train_samples = sum(round_samples)
+                total_eval_samples = 0
+                per_client_metrics = []
                 
                 with ThreadPoolExecutor(max_workers=4) as executor:
                     eval_futures = []
@@ -545,9 +574,20 @@ class BubbleServer:
                         eval_futures.append(executor.submit(self.clients[cid].evaluate_shared_lstm, parameters=aggregated_weights, config={}))
                     
                     for idx, future in enumerate(eval_futures):
-                        _, _, metrics = future.result()
-                        total_rmse += metrics["rmse"] * round_samples[idx]
-                        total_smape += metrics["smape"] * round_samples[idx]
+                        cid = bubble_cids[idx]
+                        _, eval_samples, metrics = future.result()
+                        total_rmse += metrics["rmse"] * eval_samples
+                        total_smape += metrics["smape"] * eval_samples
+                        total_eval_samples += eval_samples
+                        per_client_metrics.append(
+                            {
+                                "client": cid,
+                                "num_samples": int(eval_samples),
+                                "train_samples": int(round_samples[idx]),
+                                "rmse": float(metrics["rmse"]),
+                                "smape": float(metrics["smape"]),
+                            }
+                        )
 
                 history.append(
                     {
@@ -555,13 +595,15 @@ class BubbleServer:
                         "bubble": b_idx,
                         "clients": bubble_cids,
                         "round": fl_round,
-                        "num_samples": int(total_samples),
-                        "rmse": float(total_rmse / total_samples),
-                        "smape": float(total_smape / total_samples),
+                        "num_samples": int(total_eval_samples),
+                        "train_samples": int(total_train_samples),
+                        "rmse": float(total_rmse / total_eval_samples),
+                        "smape": float(total_smape / total_eval_samples),
+                        "per_client_metrics": per_client_metrics,
                     }
                 )
                 _emit(
-                    f"    -> Bubble {b_idx} shared-LSTM metrics: RMSE={total_rmse / total_samples:.4f}, SMAPE={total_smape / total_samples:.4f}",
+                    f"    -> Bubble {b_idx} shared-LSTM metrics: RMSE={total_rmse / total_eval_samples:.4f}, SMAPE={total_smape / total_eval_samples:.4f}",
                     logger,
                 )
 
@@ -592,7 +634,7 @@ class BubbleServer:
                     logger,
                 )
                 self.save_clustering_results(
-                    "outputs/clustering_results.json",
+                    os.path.join(self.output_dir, "clustering_results.json"),
                     stage="dynamic_recluster",
                     round_num=fl_round,
                     k_star=k_star,
@@ -613,15 +655,16 @@ class BubbleServer:
                     
                     for idx, future in enumerate(finetune_futures):
                         cid = bubble_cids[idx]
-                        updated_weights, num_samples, _ = future.result()
-                        _, _, metrics = self.clients[cid].evaluate(parameters=updated_weights, config={})
+                        updated_weights, train_samples, _ = future.result()
+                        _, eval_samples, metrics = self.clients[cid].evaluate(parameters=updated_weights, config={})
                         history.append(
                             {
                                 "stage": "head_finetune",
                                 "bubble": b_idx,
                                 "client": cid,
                                 "epochs": head_finetune_epochs,
-                                "num_samples": int(num_samples),
+                                "num_samples": int(eval_samples),
+                                "train_samples": int(train_samples),
                                 "rmse": metrics["rmse"],
                                 "smape": metrics["smape"],
                             }
@@ -652,22 +695,23 @@ class BubbleServer:
             client = self.clients[cid]
             if self.shared_lstm_weights is None:
                 current_weights = client.get_parameters({})
-                updated_weights, num_samples, _ = client.fit(
+                updated_weights, train_samples, _ = client.fit(
                     parameters=current_weights,
                     config={"epochs": epochs}
                 )
             else:
                 current_weights = self._copy_parameters(self.shared_lstm_weights)
-                updated_weights, num_samples, _ = client.fit_head(
+                updated_weights, train_samples, _ = client.fit_head(
                     parameters=current_weights,
                     config={"epochs": epochs}
                 )
-            _, _, metrics = client.evaluate(parameters=updated_weights, config={})
+            _, eval_samples, metrics = client.evaluate(parameters=updated_weights, config={})
             return {
                 "stage": "personalized",
                 "client": cid,
                 "epochs": epochs,
-                "num_samples": int(num_samples),
+                "num_samples": int(eval_samples),
+                "train_samples": int(train_samples),
                 "rmse": metrics["rmse"],
                 "smape": metrics["smape"],
             }
