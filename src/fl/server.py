@@ -645,6 +645,8 @@ class BubbleServer:
 
         if head_finetune_epochs > 0:
             for b_idx, bubble_cids in enumerate(active_bubbles):
+                if len(bubble_cids) == 1:
+                    continue  # Isolated clients will be handled in step 4
                 global_weights = common_weights[b_idx]
                 
                 with ThreadPoolExecutor(max_workers=4) as executor:
@@ -675,7 +677,7 @@ class BubbleServer:
                         )
 
         self.bubbles = [bubble for bubble in active_bubbles if len(bubble) > 1]
-        self.isolated = []
+        self.isolated = [bubble[0] for bubble in active_bubbles if len(bubble) == 1]
         _emit("\nFL Training Complete.", logger)
         return history
 
