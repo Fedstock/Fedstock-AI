@@ -33,6 +33,9 @@ temp/
 # Models and data
 *.log
 fedstock_data/
+20260512_042145_175180/
+20260512_061803_178721/
+20260513_040142_904428/
 
 # IDEs and Editors
 .vscode/

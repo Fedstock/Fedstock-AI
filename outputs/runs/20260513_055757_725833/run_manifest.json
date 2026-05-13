@@ -1,0 +1,25 @@
+{
+    "schema_version": 1,
+    "run_id": "20260513_055757_725833",
+    "run_dir": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833",
+    "files": {
+        "config": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833/config.json",
+        "feature_selection": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833/feature_selection.json",
+        "split_summary": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833/split_summary.json",
+        "feature_importances": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833/feature_importances.json",
+        "clustering_results": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833/clustering_results.json",
+        "metrics_history": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833/metrics_history.json",
+        "per_client_metrics_json": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833/per_client_metrics.json",
+        "per_client_metrics_csv": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833/per_client_metrics.csv",
+        "final_results": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833/final_results.json",
+        "evaluation_report": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833/evaluation_report.md",
+        "baseline_comparison": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833/baseline_comparison.png",
+        "models": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833/models/",
+        "run_manifest": "/home/imeslab/ryu/model/outputs/runs/20260513_055757_725833/run_manifest.json"
+    },
+    "notes": [
+        "Per-client metrics are saved as both nested histories and a flat table.",
+        "Clustering records include per-bubble client membership and client-to-cluster assignments.",
+        "Reported final metrics use held-out test sequences."
+    ]
+}

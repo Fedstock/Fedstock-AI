@@ -1,0 +1,19 @@
+{
+    "run_id": "20260513_055757_725833",
+    "results": {
+        "Local": {
+            "rmse": 34.39895760864754,
+            "smape": 59.78603504279081
+        },
+        "Global FedAvg": {
+            "rmse": 24.867412314008913,
+            "smape": 51.69730456178981
+        },
+        "PA-CFL": {
+            "rmse": 24.719725205192276,
+            "smape": 50.03429348801258
+        }
+    },
+    "evaluation_split": "test",
+    "metric_weight": "evaluation sequence count"
+}

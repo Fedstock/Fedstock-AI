@@ -19,11 +19,11 @@ python run_fl_baselines.py
 | 파라미터 | 기본값 | 설명 |
 | :--- | :---: | :--- |
 | `num_rounds` | 100 | federated learning 라운드 수 |
-| `epochs_per_round` | 5 | 라운드당 local epoch 수 |
+| `epochs_per_round` | 3 | 라운드당 local epoch 수 |
 | `seq_len` | 14 | LSTM 입력 시퀀스 길이 |
-| `global_warmup_rounds` | 1 | 공통 글로벌 warm-up 라운드 수 |
-| `recluster_interval` | 10 | 동적 재클러스터링 주기 |
-| `head_finetune_epochs` | 1 | 개인화 head fine-tuning epoch 수 |
+| `global_warmup_rounds` | 20 | 공통 글로벌 warm-up 라운드 수 |
+| `recluster_interval` | 20 | 동적 재클러스터링 주기 |
+| `head_finetune_epochs` | 20 | 개인화 head fine-tuning epoch 수 |
 
 ## 파이프라인
 
@@ -100,20 +100,13 @@ model/
 │  ├─ models/
 │  │  └─ lstm.py
 │  └─ fedstock_data/
-│     └─ data/
-│        └─ clients/
-│           └─ client_*.db
 ├─ outputs/
-│  ├─ baseline_comparison.png
-│  ├─ clustering_results.json
-│  ├─ evaluation_report.md
-│  ├─ feature_importances.json
-│  ├─ feature_selection.json
-│  ├─ logs/
-│  │  └─ training_full.log
-│  └─ models/
-│     ├─ bubbles/
-│     └─ clients/
+│  ├─ runs/
+│  │  ├─ (Latest experimental results folder)/
+│  │  │  ├─ models/
+│  │  │  │  ├─ bubbles/
+│  │  │  │  └─ clients/
+│  └─ └─ └─ (Output files)
 └─ temp/
    └─ reference and experiment scratch files
 ```

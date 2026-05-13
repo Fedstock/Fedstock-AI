@@ -1,0 +1,702 @@
+{
+    "CA_1_FOODS_1": {
+        "raw_rows": 17625,
+        "train_rows": 12335,
+        "val_rows": 2644,
+        "test_rows": 2646,
+        "train_sequences": 12195,
+        "val_sequences": 2504,
+        "test_sequences": 2506,
+        "num_items": 10
+    },
+    "CA_1_FOODS_2": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "CA_1_FOODS_3": {
+        "raw_rows": 18724,
+        "train_rows": 13105,
+        "val_rows": 2809,
+        "test_rows": 2810,
+        "train_sequences": 12965,
+        "val_sequences": 2669,
+        "test_sequences": 2670,
+        "num_items": 10
+    },
+    "CA_1_HOBBIES_1": {
+        "raw_rows": 18969,
+        "train_rows": 13276,
+        "val_rows": 2846,
+        "test_rows": 2847,
+        "train_sequences": 13136,
+        "val_sequences": 2706,
+        "test_sequences": 2707,
+        "num_items": 10
+    },
+    "CA_1_HOBBIES_2": {
+        "raw_rows": 17471,
+        "train_rows": 12227,
+        "val_rows": 2622,
+        "test_rows": 2622,
+        "train_sequences": 12087,
+        "val_sequences": 2482,
+        "test_sequences": 2482,
+        "num_items": 10
+    },
+    "CA_1_HOUSEHOLD_1": {
+        "raw_rows": 15399,
+        "train_rows": 10774,
+        "val_rows": 2312,
+        "test_rows": 2313,
+        "train_sequences": 10634,
+        "val_sequences": 2172,
+        "test_sequences": 2173,
+        "num_items": 10
+    },
+    "CA_1_HOUSEHOLD_2": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "CA_2_FOODS_1": {
+        "raw_rows": 18290,
+        "train_rows": 12800,
+        "val_rows": 2745,
+        "test_rows": 2745,
+        "train_sequences": 12660,
+        "val_sequences": 2605,
+        "test_sequences": 2605,
+        "num_items": 10
+    },
+    "CA_2_FOODS_2": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "CA_2_FOODS_3": {
+        "raw_rows": 18346,
+        "train_rows": 12840,
+        "val_rows": 2753,
+        "test_rows": 2753,
+        "train_sequences": 12700,
+        "val_sequences": 2613,
+        "test_sequences": 2613,
+        "num_items": 10
+    },
+    "CA_2_HOBBIES_1": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "CA_2_HOBBIES_2": {
+        "raw_rows": 17492,
+        "train_rows": 12242,
+        "val_rows": 2625,
+        "test_rows": 2625,
+        "train_sequences": 12102,
+        "val_sequences": 2485,
+        "test_sequences": 2485,
+        "num_items": 10
+    },
+    "CA_2_HOUSEHOLD_1": {
+        "raw_rows": 18052,
+        "train_rows": 12633,
+        "val_rows": 2709,
+        "test_rows": 2710,
+        "train_sequences": 12493,
+        "val_sequences": 2569,
+        "test_sequences": 2570,
+        "num_items": 10
+    },
+    "CA_2_HOUSEHOLD_2": {
+        "raw_rows": 17814,
+        "train_rows": 12467,
+        "val_rows": 2674,
+        "test_rows": 2673,
+        "train_sequences": 12327,
+        "val_sequences": 2534,
+        "test_sequences": 2533,
+        "num_items": 10
+    },
+    "CA_3_FOODS_1": {
+        "raw_rows": 17618,
+        "train_rows": 12329,
+        "val_rows": 2644,
+        "test_rows": 2645,
+        "train_sequences": 12189,
+        "val_sequences": 2504,
+        "test_sequences": 2505,
+        "num_items": 10
+    },
+    "CA_3_FOODS_2": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "CA_3_FOODS_3": {
+        "raw_rows": 18724,
+        "train_rows": 13105,
+        "val_rows": 2809,
+        "test_rows": 2810,
+        "train_sequences": 12965,
+        "val_sequences": 2669,
+        "test_sequences": 2670,
+        "num_items": 10
+    },
+    "CA_3_HOBBIES_1": {
+        "raw_rows": 18619,
+        "train_rows": 13031,
+        "val_rows": 2793,
+        "test_rows": 2795,
+        "train_sequences": 12891,
+        "val_sequences": 2653,
+        "test_sequences": 2655,
+        "num_items": 10
+    },
+    "CA_3_HOBBIES_2": {
+        "raw_rows": 18549,
+        "train_rows": 12982,
+        "val_rows": 2783,
+        "test_rows": 2784,
+        "train_sequences": 12842,
+        "val_sequences": 2643,
+        "test_sequences": 2644,
+        "num_items": 10
+    },
+    "CA_3_HOUSEHOLD_1": {
+        "raw_rows": 15784,
+        "train_rows": 11044,
+        "val_rows": 2369,
+        "test_rows": 2371,
+        "train_sequences": 10904,
+        "val_sequences": 2229,
+        "test_sequences": 2231,
+        "num_items": 10
+    },
+    "CA_3_HOUSEHOLD_2": {
+        "raw_rows": 18892,
+        "train_rows": 13221,
+        "val_rows": 2835,
+        "test_rows": 2836,
+        "train_sequences": 13081,
+        "val_sequences": 2695,
+        "test_sequences": 2696,
+        "num_items": 10
+    },
+    "CA_4_FOODS_1": {
+        "raw_rows": 17254,
+        "train_rows": 12075,
+        "val_rows": 2589,
+        "test_rows": 2590,
+        "train_sequences": 11935,
+        "val_sequences": 2449,
+        "test_sequences": 2450,
+        "num_items": 10
+    },
+    "CA_4_FOODS_2": {
+        "raw_rows": 18542,
+        "train_rows": 12977,
+        "val_rows": 2782,
+        "test_rows": 2783,
+        "train_sequences": 12837,
+        "val_sequences": 2642,
+        "test_sequences": 2643,
+        "num_items": 10
+    },
+    "CA_4_FOODS_3": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "CA_4_HOBBIES_1": {
+        "raw_rows": 18577,
+        "train_rows": 13000,
+        "val_rows": 2788,
+        "test_rows": 2789,
+        "train_sequences": 12860,
+        "val_sequences": 2648,
+        "test_sequences": 2649,
+        "num_items": 10
+    },
+    "CA_4_HOBBIES_2": {
+        "raw_rows": 18031,
+        "train_rows": 12618,
+        "val_rows": 2706,
+        "test_rows": 2707,
+        "train_sequences": 12478,
+        "val_sequences": 2566,
+        "test_sequences": 2567,
+        "num_items": 10
+    },
+    "CA_4_HOUSEHOLD_1": {
+        "raw_rows": 17387,
+        "train_rows": 12168,
+        "val_rows": 2609,
+        "test_rows": 2610,
+        "train_sequences": 12028,
+        "val_sequences": 2469,
+        "test_sequences": 2470,
+        "num_items": 10
+    },
+    "CA_4_HOUSEHOLD_2": {
+        "raw_rows": 17905,
+        "train_rows": 12531,
+        "val_rows": 2687,
+        "test_rows": 2687,
+        "train_sequences": 12391,
+        "val_sequences": 2547,
+        "test_sequences": 2547,
+        "num_items": 10
+    },
+    "TX_1_FOODS_1": {
+        "raw_rows": 16743,
+        "train_rows": 11717,
+        "val_rows": 2511,
+        "test_rows": 2515,
+        "train_sequences": 11577,
+        "val_sequences": 2371,
+        "test_sequences": 2375,
+        "num_items": 10
+    },
+    "TX_1_FOODS_2": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "TX_1_FOODS_3": {
+        "raw_rows": 18724,
+        "train_rows": 13105,
+        "val_rows": 2809,
+        "test_rows": 2810,
+        "train_sequences": 12965,
+        "val_sequences": 2669,
+        "test_sequences": 2670,
+        "num_items": 10
+    },
+    "TX_1_HOBBIES_1": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "TX_1_HOBBIES_2": {
+        "raw_rows": 18654,
+        "train_rows": 13055,
+        "val_rows": 2799,
+        "test_rows": 2800,
+        "train_sequences": 12915,
+        "val_sequences": 2659,
+        "test_sequences": 2660,
+        "num_items": 10
+    },
+    "TX_1_HOUSEHOLD_1": {
+        "raw_rows": 17275,
+        "train_rows": 12089,
+        "val_rows": 2592,
+        "test_rows": 2594,
+        "train_sequences": 11949,
+        "val_sequences": 2452,
+        "test_sequences": 2454,
+        "num_items": 10
+    },
+    "TX_1_HOUSEHOLD_2": {
+        "raw_rows": 16302,
+        "train_rows": 11408,
+        "val_rows": 2446,
+        "test_rows": 2448,
+        "train_sequences": 11268,
+        "val_sequences": 2306,
+        "test_sequences": 2308,
+        "num_items": 10
+    },
+    "TX_2_FOODS_1": {
+        "raw_rows": 17723,
+        "train_rows": 12403,
+        "val_rows": 2659,
+        "test_rows": 2661,
+        "train_sequences": 12263,
+        "val_sequences": 2519,
+        "test_sequences": 2521,
+        "num_items": 10
+    },
+    "TX_2_FOODS_2": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "TX_2_FOODS_3": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "TX_2_HOBBIES_1": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "TX_2_HOBBIES_2": {
+        "raw_rows": 18647,
+        "train_rows": 13051,
+        "val_rows": 2798,
+        "test_rows": 2798,
+        "train_sequences": 12911,
+        "val_sequences": 2658,
+        "test_sequences": 2658,
+        "num_items": 10
+    },
+    "TX_2_HOUSEHOLD_1": {
+        "raw_rows": 17611,
+        "train_rows": 12324,
+        "val_rows": 2643,
+        "test_rows": 2644,
+        "train_sequences": 12184,
+        "val_sequences": 2503,
+        "test_sequences": 2504,
+        "num_items": 10
+    },
+    "TX_2_HOUSEHOLD_2": {
+        "raw_rows": 18416,
+        "train_rows": 12889,
+        "val_rows": 2763,
+        "test_rows": 2764,
+        "train_sequences": 12749,
+        "val_sequences": 2623,
+        "test_sequences": 2624,
+        "num_items": 10
+    },
+    "TX_3_FOODS_1": {
+        "raw_rows": 17765,
+        "train_rows": 12433,
+        "val_rows": 2664,
+        "test_rows": 2668,
+        "train_sequences": 12293,
+        "val_sequences": 2524,
+        "test_sequences": 2528,
+        "num_items": 10
+    },
+    "TX_3_FOODS_2": {
+        "raw_rows": 19018,
+        "train_rows": 13310,
+        "val_rows": 2854,
+        "test_rows": 2854,
+        "train_sequences": 13170,
+        "val_sequences": 2714,
+        "test_sequences": 2714,
+        "num_items": 10
+    },
+    "TX_3_FOODS_3": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "TX_3_HOBBIES_1": {
+        "raw_rows": 16666,
+        "train_rows": 11664,
+        "val_rows": 2501,
+        "test_rows": 2501,
+        "train_sequences": 11524,
+        "val_sequences": 2361,
+        "test_sequences": 2361,
+        "num_items": 10
+    },
+    "TX_3_HOBBIES_2": {
+        "raw_rows": 18598,
+        "train_rows": 13016,
+        "val_rows": 2791,
+        "test_rows": 2791,
+        "train_sequences": 12876,
+        "val_sequences": 2651,
+        "test_sequences": 2651,
+        "num_items": 10
+    },
+    "TX_3_HOUSEHOLD_1": {
+        "raw_rows": 17156,
+        "train_rows": 12005,
+        "val_rows": 2575,
+        "test_rows": 2576,
+        "train_sequences": 11865,
+        "val_sequences": 2435,
+        "test_sequences": 2436,
+        "num_items": 10
+    },
+    "TX_3_HOUSEHOLD_2": {
+        "raw_rows": 18416,
+        "train_rows": 12889,
+        "val_rows": 2763,
+        "test_rows": 2764,
+        "train_sequences": 12749,
+        "val_sequences": 2623,
+        "test_sequences": 2624,
+        "num_items": 10
+    },
+    "WI_1_FOODS_1": {
+        "raw_rows": 18332,
+        "train_rows": 12829,
+        "val_rows": 2751,
+        "test_rows": 2752,
+        "train_sequences": 12689,
+        "val_sequences": 2611,
+        "test_sequences": 2612,
+        "num_items": 10
+    },
+    "WI_1_FOODS_2": {
+        "raw_rows": 16400,
+        "train_rows": 11476,
+        "val_rows": 2461,
+        "test_rows": 2463,
+        "train_sequences": 11336,
+        "val_sequences": 2321,
+        "test_sequences": 2323,
+        "num_items": 10
+    },
+    "WI_1_FOODS_3": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "WI_1_HOBBIES_1": {
+        "raw_rows": 18920,
+        "train_rows": 13242,
+        "val_rows": 2839,
+        "test_rows": 2839,
+        "train_sequences": 13102,
+        "val_sequences": 2699,
+        "test_sequences": 2699,
+        "num_items": 10
+    },
+    "WI_1_HOBBIES_2": {
+        "raw_rows": 19053,
+        "train_rows": 13335,
+        "val_rows": 2859,
+        "test_rows": 2859,
+        "train_sequences": 13195,
+        "val_sequences": 2719,
+        "test_sequences": 2719,
+        "num_items": 10
+    },
+    "WI_1_HOUSEHOLD_1": {
+        "raw_rows": 17597,
+        "train_rows": 12314,
+        "val_rows": 2641,
+        "test_rows": 2642,
+        "train_sequences": 12174,
+        "val_sequences": 2501,
+        "test_sequences": 2502,
+        "num_items": 10
+    },
+    "WI_1_HOUSEHOLD_2": {
+        "raw_rows": 14930,
+        "train_rows": 10448,
+        "val_rows": 2241,
+        "test_rows": 2241,
+        "train_sequences": 10308,
+        "val_sequences": 2101,
+        "test_sequences": 2101,
+        "num_items": 10
+    },
+    "WI_2_FOODS_1": {
+        "raw_rows": 17541,
+        "train_rows": 12275,
+        "val_rows": 2632,
+        "test_rows": 2634,
+        "train_sequences": 12135,
+        "val_sequences": 2492,
+        "test_sequences": 2494,
+        "num_items": 10
+    },
+    "WI_2_FOODS_2": {
+        "raw_rows": 16974,
+        "train_rows": 11878,
+        "val_rows": 2547,
+        "test_rows": 2549,
+        "train_sequences": 11738,
+        "val_sequences": 2407,
+        "test_sequences": 2409,
+        "num_items": 10
+    },
+    "WI_2_FOODS_3": {
+        "raw_rows": 19004,
+        "train_rows": 13301,
+        "val_rows": 2851,
+        "test_rows": 2852,
+        "train_sequences": 13161,
+        "val_sequences": 2711,
+        "test_sequences": 2712,
+        "num_items": 10
+    },
+    "WI_2_HOBBIES_1": {
+        "raw_rows": 18794,
+        "train_rows": 13153,
+        "val_rows": 2820,
+        "test_rows": 2821,
+        "train_sequences": 13013,
+        "val_sequences": 2680,
+        "test_sequences": 2681,
+        "num_items": 10
+    },
+    "WI_2_HOBBIES_2": {
+        "raw_rows": 17849,
+        "train_rows": 12492,
+        "val_rows": 2678,
+        "test_rows": 2679,
+        "train_sequences": 12352,
+        "val_sequences": 2538,
+        "test_sequences": 2539,
+        "num_items": 10
+    },
+    "WI_2_HOUSEHOLD_1": {
+        "raw_rows": 14993,
+        "train_rows": 10488,
+        "val_rows": 2251,
+        "test_rows": 2254,
+        "train_sequences": 10348,
+        "val_sequences": 2111,
+        "test_sequences": 2114,
+        "num_items": 10
+    },
+    "WI_2_HOUSEHOLD_2": {
+        "raw_rows": 16127,
+        "train_rows": 11285,
+        "val_rows": 2419,
+        "test_rows": 2423,
+        "train_sequences": 11145,
+        "val_sequences": 2279,
+        "test_sequences": 2283,
+        "num_items": 10
+    },
+    "WI_3_FOODS_1": {
+        "raw_rows": 18038,
+        "train_rows": 12623,
+        "val_rows": 2707,
+        "test_rows": 2708,
+        "train_sequences": 12483,
+        "val_sequences": 2567,
+        "test_sequences": 2568,
+        "num_items": 10
+    },
+    "WI_3_FOODS_2": {
+        "raw_rows": 18738,
+        "train_rows": 13114,
+        "val_rows": 2812,
+        "test_rows": 2812,
+        "train_sequences": 12974,
+        "val_sequences": 2672,
+        "test_sequences": 2672,
+        "num_items": 10
+    },
+    "WI_3_FOODS_3": {
+        "raw_rows": 18654,
+        "train_rows": 13056,
+        "val_rows": 2799,
+        "test_rows": 2799,
+        "train_sequences": 12916,
+        "val_sequences": 2659,
+        "test_sequences": 2659,
+        "num_items": 10
+    },
+    "WI_3_HOBBIES_1": {
+        "raw_rows": 19060,
+        "train_rows": 13340,
+        "val_rows": 2860,
+        "test_rows": 2860,
+        "train_sequences": 13200,
+        "val_sequences": 2720,
+        "test_sequences": 2720,
+        "num_items": 10
+    },
+    "WI_3_HOBBIES_2": {
+        "raw_rows": 19046,
+        "train_rows": 13330,
+        "val_rows": 2858,
+        "test_rows": 2858,
+        "train_sequences": 13190,
+        "val_sequences": 2718,
+        "test_sequences": 2718,
+        "num_items": 10
+    },
+    "WI_3_HOUSEHOLD_1": {
+        "raw_rows": 17156,
+        "train_rows": 12005,
+        "val_rows": 2575,
+        "test_rows": 2576,
+        "train_sequences": 11865,
+        "val_sequences": 2435,
+        "test_sequences": 2436,
+        "num_items": 10
+    },
+    "WI_3_HOUSEHOLD_2": {
+        "raw_rows": 18304,
+        "train_rows": 12810,
+        "val_rows": 2746,
+        "test_rows": 2748,
+        "train_sequences": 12670,
+        "val_sequences": 2606,
+        "test_sequences": 2608,
+        "num_items": 10
+    }
+}
