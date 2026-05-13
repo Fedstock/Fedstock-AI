@@ -131,6 +131,9 @@ def perform_clustering(
     complexity_penalty=0.001,
     singleton_penalty=0.05,
     isolation_std_multiplier=0.75,
+    ema_dict=None,
+    client_ids=None,
+    ema_alpha=0.8,
 ):
     """
     Perform Agglomerative Clustering and find the optimal number of clusters 
@@ -143,6 +146,15 @@ def perform_clustering(
     - isolated_clients: List of clients in clusters of size 1
     """
     normalized = normalize_importance(noisy_importances)
+    
+    # Apply EMA on the normalized distributions if requested
+    if ema_dict is not None and client_ids is not None:
+        for idx, cid in enumerate(client_ids):
+            if cid in ema_dict:
+                # Check for shape mismatch (e.g., transitioning from feature importances to model weights)
+                if ema_dict[cid].shape == normalized[idx].shape:
+                    normalized[idx] = ema_alpha * ema_dict[cid] + (1 - ema_alpha) * normalized[idx]
+            ema_dict[cid] = normalized[idx].copy()
     dist_matrix = compute_emd_distance_matrix(normalized)
     
     n_clients = len(noisy_importances)

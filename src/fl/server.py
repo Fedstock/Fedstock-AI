@@ -27,6 +27,8 @@ class BubbleServer:
         self.shared_global_weights = None
         self.shared_lstm_weights = None
         self.clustering_history = []
+        self.ema_alpha = 0.8  # Decay factor for EMA
+        self.ema_dict = {}    # To store EMA of normalized distributions for clustering
 
     @staticmethod
     def _copy_parameters(parameters):
@@ -62,6 +64,9 @@ class BubbleServer:
             max_clusters=max_clusters,
             complexity_penalty=0.001,
             singleton_penalty=0.05,
+            ema_dict=self.ema_dict,
+            client_ids=client_ids,
+            ema_alpha=self.ema_alpha,
         )
         bubble_dict = {}
         for idx, label in enumerate(labels):
@@ -204,6 +209,9 @@ class BubbleServer:
             max_clusters=15,
             complexity_penalty=0.001,
             singleton_penalty=0.05,
+            ema_dict=self.ema_dict,
+            client_ids=client_ids,
+            ema_alpha=self.ema_alpha,
         )
         
         print(f"Optimal Clusters (k*): {k_star}")

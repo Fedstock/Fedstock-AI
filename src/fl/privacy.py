@@ -10,7 +10,7 @@ def calculate_feature_importance(X, y):
     model.fit(X, y)
     return model.feature_importances_
 
-def get_noisy_feature_importance(X, y, epsilon=10.0, clip_norm=1.0):
+def get_noisy_feature_importance(X, y, epsilon=10.0, clip_norm=0.15):
     """
     Calculate feature importance and apply Differential Privacy.
     Uses 'Gradient Clipping' equivalent on feature importances to bound the sensitivity.

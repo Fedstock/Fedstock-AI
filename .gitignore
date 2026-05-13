@@ -33,6 +33,7 @@ temp/
 # Models and data
 *.log
 fedstock_data/
+runs/
 
 # IDEs and Editors
 .vscode/

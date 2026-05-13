@@ -3,6 +3,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import copy
 import csv
 import json
+import random
 from datetime import datetime
 
 import matplotlib.pyplot as plt
@@ -15,6 +16,33 @@ from src.dataset import CANDIDATE_FEATURE_COLS, load_client_data, make_group_tim
 from src.fl.client import FedStockClient
 from src.fl.extract_features import compute_anova_feature_selection, save_feature_selection
 from src.fl.server import BubbleServer
+
+def seed_everything(seed=42):
+    """
+    재현성을 보장하기 위해 모든 난수 시드를 고정하고 결정론적(deterministic) 연산을 설정합니다.
+    random, numpy, torch, CUDA 및 Laplace RNG(np.random.laplace 등)의 
+    동작을 명시적으로 제어하여 동일한 환경에서 동일한 결과를 얻도록 합니다.
+    """
+    # 1. Python 기본 난수 제어
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+
+    # 2. Numpy 난수 제어 (Laplace RNG 등 np.random 기반 함수들에 적용)
+    np.random.seed(seed)
+
+    # 3. PyTorch 난수 제어
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # 4. CUDA 결정론적 연산 설정
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    # 5. PyTorch 결정론적 알고리즘 강제 (CUDA >= 10.2 환경 변수 포함)
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    torch.use_deterministic_algorithms(True, warn_only=True)
+
 
 def create_sequences(X, y, seq_len):
     xs, ys = [], []
@@ -154,7 +182,7 @@ def setup_client(
         y_train=y_train_seq,
         input_size=input_size,
         hidden_size=32,
-        epsilon=10.0,
+        epsilon=30.0,
         y_scaler=y_scaler
     )
     client.split_stats = {
@@ -254,6 +282,9 @@ def build_run_manifest(run_id, run_dir):
     }
 
 def main():
+    # 재현성을 위한 전체 시드 고정 및 결정론적 설정 적용
+    seed_everything(seed=42)
+
     print("=== Starting PA-CFL Evaluation Pipeline ===")
     current_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.join(current_dir, "src", "fedstock_data", "data", "clients")
@@ -265,11 +296,11 @@ def main():
     seq_len = 14
     train_ratio = 0.70
     val_ratio = 0.15
-    num_rounds = 100
-    epochs_per_round = 5
-    global_warmup_rounds = 1
-    head_finetune_epochs = 1
-    recluster_interval = 10
+    num_rounds = 200
+    epochs_per_round = 3
+    global_warmup_rounds = 20
+    head_finetune_epochs = 10
+    recluster_interval = 20
     feature_top_k = 12
     feature_alpha = 0.10
     
