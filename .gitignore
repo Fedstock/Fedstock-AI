@@ -29,13 +29,15 @@ ENV/
 temp/
 *.txt
 *.pdf
+!outputs/latest_run.txt
 
 # Models and data
 *.log
 fedstock_data/
-20260512_042145_175180/
-20260512_061803_178721/
-20260513_040142_904428/
+
+# Ignore all runs except the latest (referenced in outputs/latest_run.txt)
+outputs/runs/*
+!outputs/runs/20260515_034358_970337/
 
 # IDEs and Editors
 .vscode/

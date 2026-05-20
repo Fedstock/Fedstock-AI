@@ -5,12 +5,25 @@ import csv
 import json
 import random
 from datetime import datetime
-
+import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from sklearn.preprocessing import RobustScaler, StandardScaler
 from torch.utils.data import TensorDataset, DataLoader
+
+class Logger(object):
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, "a", encoding="utf-8")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)  
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
 
 from src.dataset import CANDIDATE_FEATURE_COLS, load_client_data, make_group_time_split_indices
 from src.fl.client import FedStockClient
@@ -199,11 +212,12 @@ def setup_client(
 
 def aggregate_metrics(history_list):
     if not history_list:
-        return 0.0, 0.0
+        return {k: 0.0 for k in ["rmse", "smape", "mae", "wmape", "mase"]}
     total_samples = sum(h["num_samples"] for h in history_list)
-    avg_rmse = sum(h["rmse"] * h["num_samples"] for h in history_list) / total_samples
-    avg_smape = sum(h["smape"] * h["num_samples"] for h in history_list) / total_samples
-    return avg_rmse, avg_smape
+    result = {}
+    for metric in ["rmse", "smape", "mae", "wmape", "mase"]:
+        result[metric] = sum(h.get(metric, 0.0) * h["num_samples"] for h in history_list) / total_samples
+    return result
 
 
 def create_run_dir(base_output_dir):
@@ -243,6 +257,9 @@ def flatten_per_client_metrics(histories):
                         "train_samples": record.get("train_samples"),
                         "rmse": record.get("rmse"),
                         "smape": record.get("smape"),
+                        "mae": record.get("mae"),
+                        "wmape": record.get("wmape"),
+                        "mase": record.get("mase"),
                     }
                 )
                 rows.append(row)
@@ -264,6 +281,7 @@ def build_run_manifest(run_id, run_dir):
         "evaluation_report": "evaluation_report.md",
         "baseline_comparison": "baseline_comparison.png",
         "models": "models/",
+        "logs": "logs/",
         "run_manifest": "run_manifest.json",
     }
     return {
@@ -290,6 +308,11 @@ def main():
     data_dir = os.path.join(current_dir, "src", "fedstock_data", "data", "clients")
     output_base_dir = os.path.join(current_dir, "outputs")
     run_id, run_dir = create_run_dir(output_base_dir)
+    
+    log_dir = os.path.join(run_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    sys.stdout = Logger(os.path.join(log_dir, "training_full.log"))
+    
     print(f"Run outputs will be saved to {run_dir}")
 
     # Hyperparameters and evaluation protocol
@@ -383,9 +406,9 @@ def main():
     local_server.bubbles = []
     # step_4 acts as local training for all clients
     local_history = local_server.step_4_personalized_learning(epochs=num_rounds * epochs_per_round)
-    local_rmse, local_smape = aggregate_metrics(local_history)
-    results["Local"] = {"rmse": local_rmse, "smape": local_smape}
-    print(f"[Local] RMSE: {local_rmse:.4f}, SMAPE: {local_smape:.4f}")
+    local_metrics = aggregate_metrics(local_history)
+    results["Local"] = local_metrics
+    print(f"[Local] RMSE: {local_metrics['rmse']:.4f}, SMAPE: {local_metrics['smape']:.4f}, MAE: {local_metrics['mae']:.4f}, WMAPE: {local_metrics['wmape']:.4f}, MASE: {local_metrics['mase']:.4f}")
     
     # --- Strategy 2: Global FedAvg ---
     print("\n\n=== Strategy 2: Global FedAvg ===")
@@ -396,9 +419,9 @@ def main():
     fedavg_history = fedavg_server.step_3_federated_learning(num_rounds=num_rounds, epochs_per_round=epochs_per_round)
     # The last round's global history contains the evaluation across all clients in the bubble
     last_round_fedavg = [h for h in fedavg_history if h["round"] == num_rounds]
-    fedavg_rmse, fedavg_smape = aggregate_metrics(last_round_fedavg)
-    results["Global FedAvg"] = {"rmse": fedavg_rmse, "smape": fedavg_smape}
-    print(f"[Global FedAvg] RMSE: {fedavg_rmse:.4f}, SMAPE: {fedavg_smape:.4f}")
+    fedavg_metrics = aggregate_metrics(last_round_fedavg)
+    results["Global FedAvg"] = fedavg_metrics
+    print(f"[Global FedAvg] RMSE: {fedavg_metrics['rmse']:.4f}, SMAPE: {fedavg_metrics['smape']:.4f}, MAE: {fedavg_metrics['mae']:.4f}, WMAPE: {fedavg_metrics['wmape']:.4f}, MASE: {fedavg_metrics['mase']:.4f}")
 
     # --- Strategy 3: PA-CFL ---
     print("\n\n=== Strategy 3: PA-CFL ===")
@@ -419,9 +442,9 @@ def main():
     pacfl_head_metrics = [h for h in pacfl_fed_history if h["stage"] == "head_finetune"]
     pacfl_bubble_metrics = pacfl_head_metrics or [h for h in pacfl_fed_history if h["round"] == num_rounds]
     pacfl_final_metrics = pacfl_bubble_metrics + pacfl_pers_history
-    pacfl_rmse, pacfl_smape = aggregate_metrics(pacfl_final_metrics)
-    results["PA-CFL"] = {"rmse": pacfl_rmse, "smape": pacfl_smape}
-    print(f"[PA-CFL] RMSE: {pacfl_rmse:.4f}, SMAPE: {pacfl_smape:.4f}")
+    pacfl_metrics = aggregate_metrics(pacfl_final_metrics)
+    results["PA-CFL"] = pacfl_metrics
+    print(f"[PA-CFL] RMSE: {pacfl_metrics['rmse']:.4f}, SMAPE: {pacfl_metrics['smape']:.4f}, MAE: {pacfl_metrics['mae']:.4f}, WMAPE: {pacfl_metrics['wmape']:.4f}, MASE: {pacfl_metrics['mase']:.4f}")
     
     # Save final models for PA-CFL
     pacfl_server.save_models(output_dir=os.path.join(run_dir, "models"))
@@ -455,39 +478,57 @@ def main():
     print("\n=== Generating Visualizations ===")
     strategies = list(results.keys())
     rmses = [results[s]["rmse"] for s in strategies]
+    maes = [results[s]["mae"] for s in strategies]
     smapes = [results[s]["smape"] for s in strategies]
+    wmapes = [results[s]["wmape"] for s in strategies]
+    mases = [results[s]["mase"] for s in strategies]
     
-    fig, ax1 = plt.subplots(figsize=(10, 6))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
     
     x = np.arange(len(strategies))
     width = 0.35
     
+    # Subplot 1: RMSE and MAE (Absolute Errors)
     rects1 = ax1.bar(x - width/2, rmses, width, label='RMSE', color='skyblue')
-    ax1.set_ylabel('RMSE', color='skyblue')
-    ax1.tick_params(axis='y', labelcolor='skyblue')
-    
-    ax2 = ax1.twinx()
-    rects2 = ax2.bar(x + width/2, smapes, width, label='SMAPE', color='salmon')
-    ax2.set_ylabel('SMAPE', color='salmon')
-    ax2.tick_params(axis='y', labelcolor='salmon')
-    
+    rects2 = ax1.bar(x + width/2, maes, width, label='MAE', color='lightgreen')
+    ax1.set_ylabel('Absolute Error')
+    ax1.set_title('RMSE and MAE Comparison')
     ax1.set_xticks(x)
     ax1.set_xticklabels(strategies)
-    ax1.set_title(f'Comparison of FL Strategies ({len(client_ids)} Clients, Test Split)')
+    ax1.legend()
+    
+    # Subplot 2: SMAPE, WMAPE
+    # SMAPE is usually 0-100, WMAPE is usually 0-1 (or 0-100). 
+    # To plot them together effectively, we'll use a twin axis.
+    rects3 = ax2.bar(x - width/2, smapes, width, label='SMAPE (%)', color='salmon')
+    ax2.set_ylabel('SMAPE (%)', color='salmon')
+    ax2.tick_params(axis='y', labelcolor='salmon')
+    
+    ax3 = ax2.twinx()
+    rects4 = ax3.bar(x + width/2, wmapes, width, label='WMAPE', color='gold')
+    ax3.set_ylabel('WMAPE', color='gold')
+    ax3.tick_params(axis='y', labelcolor='gold')
+    
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(strategies)
+    ax2.set_title('SMAPE and WMAPE Comparison')
     
     # Add values on top of bars
-    def autolabel(rects, ax):
+    def autolabel(rects, ax, fmt='{:.2f}'):
         for rect in rects:
             height = rect.get_height()
-            ax.annotate(f'{height:.2f}',
+            ax.annotate(fmt.format(height),
                         xy=(rect.get_x() + rect.get_width() / 2, height),
                         xytext=(0, 3),  # 3 points vertical offset
                         textcoords="offset points",
-                        ha='center', va='bottom')
+                        ha='center', va='bottom', fontsize=9)
 
     autolabel(rects1, ax1)
-    autolabel(rects2, ax2)
+    autolabel(rects2, ax1)
+    autolabel(rects3, ax2)
+    autolabel(rects4, ax3)
     
+    fig.suptitle(f'Comparison of FL Strategies ({len(client_ids)} Clients, Test Split)', fontsize=16)
     fig.tight_layout()
     output_png = os.path.join(run_dir, "baseline_comparison.png")
     os.makedirs(os.path.dirname(output_png), exist_ok=True)
@@ -509,7 +550,7 @@ def main():
         f.write("- **Feature selection:** ANOVA fit on train rows only\n")
         f.write("\n## Results\n")
         for s in strategies:
-            f.write(f"- **{s}**: RMSE = {results[s]['rmse']:.4f}, SMAPE = {results[s]['smape']:.4f}\n")
+            f.write(f"- **{s}**: RMSE = {results[s]['rmse']:.4f}, SMAPE = {results[s]['smape']:.4f}, MAE = {results[s]['mae']:.4f}, WMAPE = {results[s]['wmape']:.4f}, MASE = {results[s]['mase']:.4f}\n")
     print(f"Evaluation report saved to {report_md}")
 
     _write_json(build_run_manifest(run_id, run_dir), os.path.join(run_dir, "run_manifest.json"))

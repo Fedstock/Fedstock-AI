@@ -149,7 +149,7 @@ class FedStockClient(fl.client.NumPyClient):
                 
         avg_loss = total_loss / len(self.val_loader.dataset)
         
-        # Calculate SMAPE and RMSE (simplified)
+        # Calculate Metrics
         import numpy as np
         y_true = np.concatenate(y_true_list)
         y_pred = np.concatenate(y_pred_list)
@@ -158,10 +158,30 @@ class FedStockClient(fl.client.NumPyClient):
             y_true = self.y_scaler.inverse_transform(y_true.reshape(-1, 1)).flatten()
             y_pred = self.y_scaler.inverse_transform(y_pred.reshape(-1, 1)).flatten()
         
+        mae = np.mean(np.abs(y_true - y_pred))
         rmse = np.sqrt(np.mean((y_true - y_pred)**2))
         smape = 100 * np.mean(2 * np.abs(y_pred - y_true) / (np.abs(y_true) + np.abs(y_pred) + 1e-8))
+        wmape = np.sum(np.abs(y_true - y_pred)) / (np.sum(np.abs(y_true)) + 1e-8)
         
-        metrics = {"rmse": float(rmse), "smape": float(smape)}
+        y_train_unscaled = self.y_train.copy()
+        if self.y_scaler is not None:
+            y_train_unscaled = self.y_scaler.inverse_transform(y_train_unscaled.reshape(-1, 1)).flatten()
+            
+        if len(y_train_unscaled) > 1:
+            naive_mae = np.mean(np.abs(np.diff(y_train_unscaled)))
+            naive_mae = max(naive_mae, 1e-8)
+        else:
+            naive_mae = 1e-8
+            
+        mase = mae / naive_mae
+        
+        metrics = {
+            "rmse": float(rmse), 
+            "smape": float(smape), 
+            "mae": float(mae), 
+            "wmape": float(wmape), 
+            "mase": float(mase)
+        }
         return float(avg_loss), len(self.val_loader.dataset), metrics
 
     def extract_noisy_importance(self):
