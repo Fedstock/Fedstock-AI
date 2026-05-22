@@ -29,6 +29,7 @@ class BubbleServer:
         self.clustering_history = []
         self.ema_alpha = 0.8  # Decay factor for EMA
         self.ema_dict = {}    # To store EMA of normalized distributions for clustering
+        self.noisy_importances = {}  # Store initial noisy feature importances for re-clustering
 
     @staticmethod
     def _copy_parameters(parameters):
@@ -54,19 +55,36 @@ class BubbleServer:
                 for local, reference in zip(local_weights, reference_weights)
             ]
         )
-        return np.concatenate([np.maximum(delta, 0.0), np.maximum(-delta, 0.0)])
+        return delta
 
-    def _cluster_update_vectors(self, update_vectors, max_clusters=15):
+    def _cluster_update_vectors(self, update_vectors, current_round, max_clusters=8):
         client_ids = list(update_vectors.keys())
         vectors = np.array([update_vectors[cid] for cid in client_ids])
+        
+        # Get active noisy feature importances for weighted concatenation
+        active_features = []
+        for cid in client_ids:
+            active_features.append(self.noisy_importances.get(cid, np.zeros(12, dtype=np.float32)))
+        active_features = np.array(active_features, dtype=np.float32)
+        
+        # Decaying feature weight (gamma) scheduling
+        # Start at 0.9, decay by 0.008 per round, min value 0.5
+        gamma_start = 0.9
+        gamma_min = 0.5
+        decay_rate = 0.008
+        feature_weight = max(gamma_min, gamma_start - decay_rate * current_round)
+        
         labels, k_star, _, isolated = perform_clustering(
             vectors,
             max_clusters=max_clusters,
-            complexity_penalty=0.03,
-            singleton_penalty=0.15,
+            complexity_penalty=0.15,
+            singleton_penalty=0.20,
             ema_dict=self.ema_dict,
             client_ids=client_ids,
             ema_alpha=self.ema_alpha,
+            metric='cosine',
+            feature_importances=active_features,
+            feature_weight=feature_weight,
         )
         bubble_dict = {}
         for idx, label in enumerate(labels):
@@ -99,24 +117,32 @@ class BubbleServer:
         return reclustered_weights
 
     def _build_shared_global_weights(self, global_warmup_rounds, epochs_per_round, logger=None):
-        client_ids = list(self.clients.keys())
-        if not client_ids:
+        # Exclude isolated clients from global warmup — they only receive the
+        # final global model later in step_4.
+        non_isolated_ids = [
+            cid for cid in self.clients.keys() if cid not in self.isolated
+        ]
+        if not non_isolated_ids:
             return None
 
-        global_weights = self.clients[client_ids[0]].get_parameters({})
+        global_weights = self.clients[non_isolated_ids[0]].get_parameters({})
         _emit(
-            f"[Shared Global] warmup_rounds={global_warmup_rounds}, clients={client_ids}",
+            f"[Shared Global] warmup_rounds={global_warmup_rounds}, clients={non_isolated_ids} (excluding {len(self.isolated)} isolated)",
             logger,
         )
         
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             for warmup_round in range(1, global_warmup_rounds + 1):
                 futures = []
-                for cid in client_ids:
+                for cid in non_isolated_ids:
                     futures.append(executor.submit(
                         self.clients[cid].fit,
                         parameters=global_weights,
-                        config={"epochs": epochs_per_round}
+                        config={
+                            "epochs": epochs_per_round,
+                            "current_round": warmup_round,
+                            "total_rounds": global_warmup_rounds,
+                        }
                     ))
                 
                 round_weights = []
@@ -197,6 +223,7 @@ class BubbleServer:
         import numpy as np
         
         importance_dict = {cid: imp.tolist() for cid, imp in zip(client_ids, noisy_importances)}
+        self.noisy_importances = {cid: np.array(imp, dtype=np.float32) for cid, imp in zip(client_ids, noisy_importances)}
         os.makedirs(self.output_dir, exist_ok=True)
         importance_path = os.path.join(self.output_dir, "feature_importances.json")
         with open(importance_path, 'w') as f:
@@ -206,12 +233,13 @@ class BubbleServer:
         noisy_importances = np.array(noisy_importances)
         labels, k_star, _, _ = perform_clustering(
             noisy_importances,
-            max_clusters=15,
-            complexity_penalty=0.03,
-            singleton_penalty=0.15,
+            max_clusters=8,
+            complexity_penalty=0.15,
+            singleton_penalty=0.20,
             ema_dict=self.ema_dict,
             client_ids=client_ids,
             ema_alpha=self.ema_alpha,
+            metric='cosine',
         )
         
         print(f"Optimal Clusters (k*): {k_star}")
@@ -425,14 +453,30 @@ class BubbleServer:
                 round_weights = []
                 round_samples = []
                 
-                with ThreadPoolExecutor(max_workers=4) as executor:
+                with ThreadPoolExecutor(max_workers=1) as executor:
                     futures = []
                     for cid in bubble_cids:
                         client = self.clients[cid]
                         if personalize_head:
-                            futures.append(executor.submit(client.fit_shared_lstm, parameters=global_weights, config={"epochs": epochs_per_round}))
+                            futures.append(executor.submit(
+                                client.fit_shared_lstm,
+                                parameters=global_weights,
+                                config={
+                                    "epochs": epochs_per_round,
+                                    "current_round": fl_round,
+                                    "total_rounds": num_rounds,
+                                }
+                            ))
                         else:
-                            futures.append(executor.submit(client.fit, parameters=global_weights, config={"epochs": epochs_per_round}))
+                            futures.append(executor.submit(
+                                client.fit,
+                                parameters=global_weights,
+                                config={
+                                    "epochs": epochs_per_round,
+                                    "current_round": fl_round,
+                                    "total_rounds": num_rounds,
+                                }
+                            ))
                     
                     for future in futures:
                         updated_weights, num_samples, _ = future.result()
@@ -449,7 +493,7 @@ class BubbleServer:
                 total_eval_samples = 0
                 per_client_metrics = []
                 
-                with ThreadPoolExecutor(max_workers=4) as executor:
+                with ThreadPoolExecutor(max_workers=1) as executor:
                     eval_futures = []
                     for cid in bubble_cids:
                         client = self.clients[cid]
@@ -492,11 +536,19 @@ class BubbleServer:
                 )
 
             if personalize_head and head_finetune_epochs > 0:
-                with ThreadPoolExecutor(max_workers=4) as executor:
+                with ThreadPoolExecutor(max_workers=1) as executor:
                     finetune_futures = []
                     for cid in bubble_cids:
                         client = self.clients[cid]
-                        finetune_futures.append(executor.submit(client.fit_head, parameters=global_weights, config={"epochs": head_finetune_epochs}))
+                        finetune_futures.append(executor.submit(
+                            client.fit_head,
+                            parameters=global_weights,
+                            config={
+                                "epochs": head_finetune_epochs,
+                                "current_round": num_rounds,
+                                "total_rounds": num_rounds,
+                            }
+                        ))
                     
                     for idx, future in enumerate(finetune_futures):
                         updated_weights, train_samples, _ = future.result()
@@ -529,11 +581,15 @@ class BubbleServer:
         logger=None,
     ):
         history = []
-        active_bubbles = [list(bubble) for bubble in self.bubbles] + [[cid] for cid in self.isolated]
+        # Isolated clients are completely excluded from FL rounds and
+        # reclustering.  They only receive the global model in step_4.
+        preserved_isolated = list(self.isolated)
+        active_bubbles = [list(bubble) for bubble in self.bubbles]
         common_weights = {
             idx: self._copy_parameters(self.shared_lstm_weights)
             for idx in range(len(active_bubbles))
         }
+        reference_weights = self._copy_parameters(self.shared_lstm_weights)
 
         for fl_round in range(1, num_rounds + 1):
             _emit(f"  Personalized shared-LSTM round {fl_round}/{num_rounds}", logger)
@@ -547,18 +603,26 @@ class BubbleServer:
                 round_weights = []
                 round_samples = []
                 
-                with ThreadPoolExecutor(max_workers=4) as executor:
+                with ThreadPoolExecutor(max_workers=1) as executor:
                     futures = []
                     for cid in bubble_cids:
                         client = self.clients[cid]
-                        futures.append(executor.submit(client.fit_shared_lstm, parameters=global_weights, config={"epochs": epochs_per_round}))
+                        futures.append(executor.submit(
+                            client.fit_shared_lstm,
+                            parameters=global_weights,
+                            config={
+                                "epochs": epochs_per_round,
+                                "current_round": fl_round,
+                                "total_rounds": num_rounds,
+                            }
+                        ))
                     
                     for idx, future in enumerate(futures):
                         cid = bubble_cids[idx]
                         updated_weights, num_samples, _ = future.result()
                         round_weights.append(updated_weights)
                         round_samples.append(num_samples)
-                        latest_update_vectors[cid] = self._flatten_delta(updated_weights, global_weights)
+                        latest_update_vectors[cid] = self._flatten_delta(updated_weights, reference_weights)
                         latest_client_weights[cid] = updated_weights
                         latest_client_samples[cid] = num_samples
 
@@ -570,7 +634,7 @@ class BubbleServer:
                 total_eval_samples = 0
                 per_client_metrics = []
                 
-                with ThreadPoolExecutor(max_workers=4) as executor:
+                with ThreadPoolExecutor(max_workers=1) as executor:
                     eval_futures = []
                     for cid in bubble_cids:
                         eval_futures.append(executor.submit(self.clients[cid].evaluate_shared_lstm, parameters=aggregated_weights, config={}))
@@ -609,18 +673,32 @@ class BubbleServer:
                 )
 
             common_weights = next_common_weights
+            
+            # Calculate the single global reference weights representing average of all client updates
+            reference_weights = self._aggregate_client_weights(
+                list(latest_client_weights.keys()),
+                latest_client_weights,
+                latest_client_samples,
+            )
+
             should_recluster = (
                 recluster_interval > 0
                 and fl_round % recluster_interval == 0
                 and fl_round < num_rounds
             )
             if should_recluster:
-                active_bubbles, isolated, k_star = self._cluster_update_vectors(latest_update_vectors)
-                common_global_weights = self._aggregate_client_weights(
-                    list(latest_client_weights.keys()),
-                    latest_client_weights,
-                    latest_client_samples,
-                )
+                # Filter out preserved isolated clients from reclustering input
+                recluster_vectors = {
+                    cid: vec for cid, vec in latest_update_vectors.items()
+                    if cid not in preserved_isolated
+                }
+                if len(recluster_vectors) > 2:
+                    active_bubbles, new_isolated, k_star = self._cluster_update_vectors(recluster_vectors, current_round=fl_round)
+                else:
+                    # Not enough non-isolated clients to recluster
+                    new_isolated = []
+                    k_star = len(active_bubbles)
+                common_global_weights = reference_weights
                 common_weights = self._build_reclustered_common_weights(
                     active_bubbles=active_bubbles,
                     latest_client_weights=latest_client_weights,
@@ -628,10 +706,13 @@ class BubbleServer:
                     common_global_weights=common_global_weights,
                 )
                 self.bubbles = [bubble for bubble in active_bubbles if len(bubble) > 1]
-                self.isolated = [cid for bubble in active_bubbles if len(bubble) == 1 for cid in bubble]
+                # Merge newly isolated clients from reclustering with the
+                # original isolated list (preserved from initial clustering).
+                dynamic_isolated = [cid for bubble in active_bubbles if len(bubble) == 1 for cid in bubble]
+                self.isolated = list(dict.fromkeys(preserved_isolated + dynamic_isolated))
                 self.shared_lstm_weights = self._copy_parameters(common_global_weights)
                 _emit(
-                    f"[Dynamic Recluster] round={fl_round}, k_star={k_star}, bubbles={active_bubbles}, isolated={isolated}, deployment=cluster_specific",
+                    f"[Dynamic Recluster] round={fl_round}, k_star={k_star}, bubbles={active_bubbles}, isolated_preserved={preserved_isolated}, isolated_new={dynamic_isolated}",
                     logger,
                 )
                 self.save_clustering_results(
@@ -650,11 +731,19 @@ class BubbleServer:
                     continue  # Isolated clients will be handled in step 4
                 global_weights = common_weights[b_idx]
                 
-                with ThreadPoolExecutor(max_workers=4) as executor:
+                with ThreadPoolExecutor(max_workers=1) as executor:
                     finetune_futures = []
                     for cid in bubble_cids:
                         client = self.clients[cid]
-                        finetune_futures.append(executor.submit(client.fit_head, parameters=global_weights, config={"epochs": head_finetune_epochs}))
+                        finetune_futures.append(executor.submit(
+                            client.fit_head,
+                            parameters=global_weights,
+                            config={
+                                "epochs": head_finetune_epochs,
+                                "current_round": num_rounds,
+                                "total_rounds": num_rounds,
+                            }
+                        ))
                     
                     for idx, future in enumerate(finetune_futures):
                         cid = bubble_cids[idx]
@@ -676,7 +765,10 @@ class BubbleServer:
                         )
 
         self.bubbles = [bubble for bubble in active_bubbles if len(bubble) > 1]
-        self.isolated = [bubble[0] for bubble in active_bubbles if len(bubble) == 1]
+        # Preserve the original isolated clients plus any newly isolated from
+        # the last reclustering iteration.
+        dynamic_isolated = [bubble[0] for bubble in active_bubbles if len(bubble) == 1]
+        self.isolated = list(dict.fromkeys(preserved_isolated + dynamic_isolated))
         _emit("\nFL Training Complete.", logger)
         return history
 
@@ -718,7 +810,7 @@ class BubbleServer:
             return record
 
         from concurrent.futures import as_completed
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             futures = {executor.submit(train_client, cid): cid for cid in self.isolated}
             for future in as_completed(futures):
                 result = future.result()

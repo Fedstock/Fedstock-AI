@@ -74,15 +74,31 @@ class FedStockClient(fl.client.NumPyClient):
         for parameter in self.model.parameters():
             parameter.requires_grad = True
 
-    def _make_optimizer(self):
+    def _make_optimizer(self, lr):
         return torch.optim.Adam(
             (param for param in self.model.parameters() if param.requires_grad),
-            lr=self.learning_rate,
+            lr=lr,
+            weight_decay=1e-4,
         )
 
-    def _train_epochs(self, epochs):
+    def _train_epochs(self, epochs, current_round=None, total_rounds=None):
         self.model.train()
-        optimizer = self._make_optimizer()
+        
+        # Calculate decayed learning rate based on current round
+        lr = self.learning_rate
+        if current_round is not None and total_rounds is not None and total_rounds > 0:
+            import math
+            # Cosine decay of the base learning rate across rounds (down to 10% of base LR)
+            eta_min = self.learning_rate * 0.1
+            lr = eta_min + 0.5 * (self.learning_rate - eta_min) * (1 + math.cos(math.pi * (current_round - 1) / total_rounds))
+            
+        optimizer = self._make_optimizer(lr)
+        
+        # Local scheduler within epochs (e.g. CosineAnnealingLR)
+        scheduler = None
+        if epochs > 1:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr * 0.5)
+            
         for _ in range(epochs):
             for batch_X, batch_y in self.train_loader:
                 batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
@@ -92,13 +108,17 @@ class FedStockClient(fl.client.NumPyClient):
                 loss = self.criterion(outputs, batch_y)
                 loss.backward()
                 optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
 
     def fit(self, parameters, config):
         # Apply weights from server
         self.set_parameters(parameters)
         epochs = config.get("epochs", 5)
+        current_round = config.get("current_round")
+        total_rounds = config.get("total_rounds")
         self._reset_trainable_layers()
-        self._train_epochs(epochs)
+        self._train_epochs(epochs, current_round, total_rounds)
 
         # Return updated weights and number of samples
         return self.get_parameters(config={}), len(self.train_loader.dataset), {}
@@ -107,17 +127,54 @@ class FedStockClient(fl.client.NumPyClient):
         # Apply shared LSTM weights while preserving this client's local output head.
         self.set_shared_parameters(parameters)
         epochs = config.get("epochs", 5)
+        current_round = config.get("current_round")
+        total_rounds = config.get("total_rounds")
         self._reset_trainable_layers()
-        self._train_epochs(epochs)
+        self._train_epochs(epochs, current_round, total_rounds)
         return self.get_shared_parameters(), len(self.train_loader.dataset), {}
 
     def fit_head(self, parameters, config):
-        # Fine-tune only the personalized output head on top of shared LSTM weights.
+        # Fine-tune the personalized output head and micro-tune shared LSTM weights.
         self.set_shared_parameters(parameters)
         epochs = config.get("epochs", 1)
-        self._set_trainable_layers(HEAD_LAYER_PREFIXES)
-        self._train_epochs(epochs)
+        current_round = config.get("current_round")
+        total_rounds = config.get("total_rounds")
+        
         self._reset_trainable_layers()
+        
+        # Calculate base decayed learning rate
+        lr = self.learning_rate
+        if current_round is not None and total_rounds is not None and total_rounds > 0:
+            import math
+            eta_min = self.learning_rate * 0.1
+            lr = eta_min + 0.5 * (self.learning_rate - eta_min) * (1 + math.cos(math.pi * (current_round - 1) / total_rounds))
+            
+        # Create parameter groups: 10% learning rate for LSTM backbone, 100% for FC head
+        lstm_params = [p for n, p in self.model.named_parameters() if n.startswith(SHARED_LAYER_PREFIXES)]
+        head_params = [p for n, p in self.model.named_parameters() if n.startswith(HEAD_LAYER_PREFIXES)]
+        
+        optimizer = torch.optim.Adam([
+            {'params': lstm_params, 'lr': lr * 0.1},
+            {'params': head_params, 'lr': lr}
+        ], weight_decay=1e-4)
+        
+        scheduler = None
+        if epochs > 1:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr * 0.5)
+            
+        self.model.train()
+        for _ in range(epochs):
+            for batch_X, batch_y in self.train_loader:
+                batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
+
+                optimizer.zero_grad()
+                outputs = self.model(batch_X)
+                loss = self.criterion(outputs, batch_y)
+                loss.backward()
+                optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
+                
         return self.get_parameters(config={}), len(self.train_loader.dataset), {}
 
     def evaluate(self, parameters, config):
@@ -191,6 +248,10 @@ class FedStockClient(fl.client.NumPyClient):
         # Flatten time series features for XGBoost
         # Reshape X_train: (samples, seq_len, features) -> (samples, seq_len * features)
         n_samples = self.X_train.shape[0]
+        seq_len = self.X_train.shape[1]
+        num_features = self.X_train.shape[2]
         X_flat = self.X_train.reshape(n_samples, -1)
-        noisy_importance, _ = get_noisy_feature_importance(X_flat, self.y_train, epsilon=self.epsilon)
+        noisy_importance, _ = get_noisy_feature_importance(
+            X_flat, self.y_train, epsilon=self.epsilon, seq_len=seq_len, num_features=num_features
+        )
         return noisy_importance

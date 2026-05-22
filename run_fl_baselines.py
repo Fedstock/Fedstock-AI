@@ -20,6 +20,7 @@ class Logger(object):
     def write(self, message):
         self.terminal.write(message)
         self.log.write(message)  
+        self.flush()
 
     def flush(self):
         self.terminal.flush()
@@ -224,10 +225,42 @@ def create_run_dir(base_output_dir):
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     run_dir = os.path.join(base_output_dir, "runs", run_id)
     os.makedirs(run_dir, exist_ok=False)
+    
     latest_path = os.path.join(base_output_dir, "latest_run.txt")
     os.makedirs(base_output_dir, exist_ok=True)
     with open(latest_path, "w") as f:
         f.write(run_dir + "\n")
+
+    # Update .gitignore dynamically to point to the latest run directory
+    try:
+        model_dir = os.path.dirname(base_output_dir)
+        gitignore_path = os.path.join(model_dir, ".gitignore")
+        if os.path.exists(gitignore_path):
+            with open(gitignore_path, "r") as f:
+                lines = f.readlines()
+            
+            new_lines = []
+            skip = False
+            for line in lines:
+                if "# Ignore all runs except the latest" in line:
+                    new_lines.append(line)
+                    new_lines.append("outputs/runs/*\n")
+                    new_lines.append(f"!outputs/runs/{run_id}/\n")
+                    skip = True
+                    continue
+                if skip:
+                    if line.strip().startswith("outputs/runs/*") or line.strip().startswith("!outputs/runs/"):
+                        continue
+                    else:
+                        skip = False
+                new_lines.append(line)
+                
+            with open(gitignore_path, "w") as f:
+                f.writelines(new_lines)
+            print(f"Updated .gitignore with latest run: {run_id}")
+    except Exception as e:
+        print(f"Failed to update .gitignore: {e}")
+
     return run_id, run_dir
 
 
@@ -319,11 +352,12 @@ def main():
     seq_len = 14
     train_ratio = 0.70
     val_ratio = 0.15
-    num_rounds = 100
+    num_rounds = 60
     epochs_per_round = 3
-    global_warmup_rounds = 20
-    head_finetune_epochs = 20
-    recluster_interval = 20
+    global_warmup_rounds = 10
+    head_finetune_epochs = 10
+    recluster_interval = 10
+    local_epochs = 40
     feature_top_k = 12
     feature_alpha = 0.10
     
@@ -361,6 +395,7 @@ def main():
         "global_warmup_rounds": global_warmup_rounds,
         "head_finetune_epochs": head_finetune_epochs,
         "recluster_interval": recluster_interval,
+        "local_epochs": local_epochs,
         "feature_top_k": feature_top_k,
         "feature_alpha": feature_alpha,
     }
@@ -405,7 +440,7 @@ def main():
     local_server.isolated = list(local_clients.keys())
     local_server.bubbles = []
     # step_4 acts as local training for all clients
-    local_history = local_server.step_4_personalized_learning(epochs=num_rounds * epochs_per_round)
+    local_history = local_server.step_4_personalized_learning(epochs=local_epochs)
     local_metrics = aggregate_metrics(local_history)
     results["Local"] = local_metrics
     print(f"[Local] RMSE: {local_metrics['rmse']:.4f}, SMAPE: {local_metrics['smape']:.4f}, MAE: {local_metrics['mae']:.4f}, WMAPE: {local_metrics['wmape']:.4f}, MASE: {local_metrics['mase']:.4f}")
@@ -436,7 +471,7 @@ def main():
         personalize_head=True,
         recluster_interval=recluster_interval,
     )
-    pacfl_pers_history = pacfl_server.step_4_personalized_learning(epochs=num_rounds * epochs_per_round)
+    pacfl_pers_history = pacfl_server.step_4_personalized_learning(epochs=local_epochs)
     
     # Prefer personalized head metrics when available; otherwise use last shared-LSTM round.
     pacfl_head_metrics = [h for h in pacfl_fed_history if h["stage"] == "head_finetune"]

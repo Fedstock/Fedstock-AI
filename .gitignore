@@ -30,6 +30,8 @@ temp/
 *.txt
 *.pdf
 !outputs/latest_run.txt
+temp_*.py
+scratch/
 
 # Models and data
 *.log
@@ -37,7 +39,7 @@ fedstock_data/
 
 # Ignore all runs except the latest (referenced in outputs/latest_run.txt)
 outputs/runs/*
-!outputs/runs/20260515_034358_970337/
+!outputs/runs/20260522_025148_061195/
 
 # IDEs and Editors
 .vscode/

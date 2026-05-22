@@ -18,12 +18,12 @@ python run_fl_baselines.py
 
 | 파라미터 | 기본값 | 설명 |
 | :--- | :---: | :--- |
-| `num_rounds` | 100 | federated learning 라운드 수 |
+| `num_rounds` | 60 | federated learning 라운드 수 |
 | `epochs_per_round` | 3 | 라운드당 local epoch 수 |
 | `seq_len` | 14 | LSTM 입력 시퀀스 길이 |
-| `global_warmup_rounds` | 20 | 공통 글로벌 warm-up 라운드 수 |
-| `recluster_interval` | 20 | 동적 재클러스터링 주기 |
-| `head_finetune_epochs` | 20 | 개인화 head fine-tuning epoch 수 |
+| `global_warmup_rounds` | 10 | 공통 글로벌 warm-up 라운드 수 |
+| `recluster_interval` | 10 | 동적 재클러스터링 주기 |
+| `head_finetune_epochs` | 10 | 개인화 head fine-tuning epoch 수 |
 
 ## 파이프라인
 
@@ -121,6 +121,20 @@ model/
 - `src/fl/server_clustering.py`: EMD 거리와 Agglomerative Clustering
 - `src/fl/extract_features.py`: ANOVA feature selection과 noisy feature importance 추출
 - `src/fl/privacy.py`: XGBoost importance와 Laplace noise 기반 DP 처리
+
+## 최종 실험 결과 (런 ID: 20260522_025148_061195)
+
+LSTM 백본 미세 조정(0.1x LR) 및 최적화된 패널티 파라미터(`complexity_penalty=0.15`, `singleton_penalty=0.20`)를 적용한 최종 예측 성능 결과는 다음과 같습니다.
+
+| 평가 전략 | RMSE | SMAPE (%) | MAE | WMAPE | MASE |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Local Training** | 25.7349 | 51.0337 | 17.2797 | 0.3813 | 3.1938 |
+| **Global FedAvg** | 24.9447 | 51.6872 | 17.3783 | 0.3706 | 3.1290 |
+| **PA-CFL (제안 기법)** | **23.5801** | **49.4666** | **15.9233** | **0.3564** | **2.9765** |
+| **개선율 (vs FedAvg)** | **-5.47%** | **-4.29%** | **-8.37%** | **-3.83%** | **-4.87%** |
+
+* **백본 미세 조정**: 로컬 개인화 학습 단계(`fit_head`)에서 LSTM 백본 레이어를 전체 동결하는 대신 `0.1 * lr`로 미세하게 함께 조정하여 로컬 시계열에 정밀 피팅시켰습니다.
+* **패널티 최적화**: `complexity_penalty`를 0.15로 높여 크기 2짜리 소규모 버블을 억제하고 균등한 클러스터 크기(Round 0: $k^*=4$)를 유지해 일반화 성능과 협동학습 효과를 보장했습니다.
 
 ## 산출물
 

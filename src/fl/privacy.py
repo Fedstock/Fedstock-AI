@@ -10,13 +10,17 @@ def calculate_feature_importance(X, y):
     model.fit(X, y)
     return model.feature_importances_
 
-def get_noisy_feature_importance(X, y, epsilon=10.0, clip_norm=0.15):
+def get_noisy_feature_importance(X, y, epsilon=10.0, clip_norm=0.15, seq_len=14, num_features=12):
     """
     Calculate feature importance and apply Differential Privacy.
     Uses 'Gradient Clipping' equivalent on feature importances to bound the sensitivity.
     """
     importance = calculate_feature_importance(X, y)
     
+    # 14 타임스텝에 걸쳐 피처별로 중요도를 평균(Averaging)하여 12차원 벡터로 축소
+    if seq_len > 1 and num_features > 0 and importance.shape[0] == seq_len * num_features:
+        importance = importance.reshape(seq_len, num_features).mean(axis=0)
+        
     # 1. Gradient Clipping: Limit the L2 norm of the importance vector
     norm = np.linalg.norm(importance)
     if norm > clip_norm:

@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.stats import wasserstein_distance
+from scipy.spatial.distance import pdist, squareform
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics import davies_bouldin_score
 
@@ -43,6 +44,17 @@ def compute_emd_distance_matrix(normalized_importances):
             
     return dist_matrix
 
+def compute_cosine_distance_matrix(vectors):
+    """
+    Compute Cosine Distance (1 - Cosine Similarity) between all pairs of vectors.
+    """
+    dists = pdist(vectors, metric='cosine')
+    # If any NaN in dists (e.g. due to zero vector), replace with 1.0 (completely dissimilar)
+    dists = np.nan_to_num(dists, nan=1.0)
+    dist_matrix = squareform(dists)
+    np.fill_diagonal(dist_matrix, 0.0)
+    return dist_matrix
+
 def _fit_agglomerative(dist_matrix, n_clusters):
     """
     Fit agglomerative clustering with a precomputed distance matrix.
@@ -71,13 +83,68 @@ def _resolve_max_clusters(n_clients, max_clusters):
         max_clusters = int(np.ceil(np.sqrt(n_clients)))
     return max(2, min(n_clients - 1, max_clusters))
 
+def _compute_filtered_dbi(X, labels):
+    """
+    Compute Davies-Bouldin Index excluding singleton clusters (size == 1) from the sum/average.
+    """
+    labels = np.array(labels)
+    unique_labels = np.unique(labels)
+    k = len(unique_labels)
+    
+    centroids = []
+    dispersions = []
+    sizes = []
+    
+    for label in unique_labels:
+        cluster_points = X[labels == label]
+        size = len(cluster_points)
+        sizes.append(size)
+        centroid = np.mean(cluster_points, axis=0)
+        centroids.append(centroid)
+        # Dispersion: average Euclidean distance of points in cluster to centroid
+        disp = np.mean(np.linalg.norm(cluster_points - centroid, axis=1))
+        dispersions.append(disp)
+        
+    centroids = np.array(centroids)
+    dispersions = np.array(dispersions)
+    sizes = np.array(sizes)
+    
+    # Identify non-singleton clusters (size > 1)
+    non_singletons = np.where(sizes > 1)[0]
+    
+    # Fallback to standard DBI if no non-singleton clusters
+    if len(non_singletons) == 0:
+        return davies_bouldin_score(X, labels)
+        
+    R = np.zeros((k, k))
+    for i in range(k):
+        for j in range(k):
+            if i != j:
+                dist = np.linalg.norm(centroids[i] - centroids[j])
+                if dist > 1e-8:
+                    R[i, j] = (dispersions[i] + dispersions[j]) / dist
+                else:
+                    R[i, j] = 0.0
+                    
+    # Calculate D_i (max similarity) for non-singleton clusters only
+    D = []
+    for i in non_singletons:
+        max_r = 0.0
+        for j in range(k):
+            if i != j:
+                if R[i, j] > max_r:
+                    max_r = R[i, j]
+        D.append(max_r)
+        
+    return float(np.mean(D))
+
 def _candidate_score(normalized, labels, k, complexity_penalty, singleton_penalty):
     """
     DBI alone does not penalize singleton-heavy solutions enough for this PA-CFL
     use case. Add small penalties so FL bubbles stay useful unless the data
     strongly supports a split.
     """
-    dbi = davies_bouldin_score(normalized, labels)
+    dbi = _compute_filtered_dbi(normalized, labels)
     labels_counts = np.bincount(labels)
     singleton_count = int(np.sum(labels_counts == 1))
     score = dbi + complexity_penalty * max(0, k - 2) + singleton_penalty * singleton_count
@@ -134,6 +201,9 @@ def perform_clustering(
     ema_dict=None,
     client_ids=None,
     ema_alpha=0.8,
+    metric='cosine',
+    feature_importances=None,
+    feature_weight=0.5,
 ):
     """
     Perform Agglomerative Clustering and find the optimal number of clusters 
@@ -145,17 +215,66 @@ def perform_clustering(
     - multi_client_bubbles: List of clusters with >1 clients
     - isolated_clients: List of clients in clusters of size 1
     """
-    normalized = normalize_importance(noisy_importances)
-    
-    # Apply EMA on the normalized distributions if requested
-    if ema_dict is not None and client_ids is not None:
-        for idx, cid in enumerate(client_ids):
-            if cid in ema_dict:
-                # Check for shape mismatch (e.g., transitioning from feature importances to model weights)
-                if ema_dict[cid].shape == normalized[idx].shape:
-                    normalized[idx] = ema_alpha * ema_dict[cid] + (1 - ema_alpha) * normalized[idx]
-            ema_dict[cid] = normalized[idx].copy()
-    dist_matrix = compute_emd_distance_matrix(normalized)
+    if metric == 'emd':
+        normalized = normalize_importance(noisy_importances)
+        
+        # Apply EMA on the normalized distributions if requested
+        if ema_dict is not None and client_ids is not None:
+            for idx, cid in enumerate(client_ids):
+                if cid in ema_dict:
+                    # Check for shape mismatch (e.g., transitioning from feature importances to model weights)
+                    if ema_dict[cid].shape == normalized[idx].shape:
+                        normalized[idx] = ema_alpha * ema_dict[cid] + (1 - ema_alpha) * normalized[idx]
+                ema_dict[cid] = normalized[idx].copy()
+        dist_matrix = compute_emd_distance_matrix(normalized)
+        features = normalized
+    elif metric == 'cosine':
+        vectors = np.array(noisy_importances, dtype=np.float32)
+        
+        # Apply EMA on the raw vectors if requested
+        if ema_dict is not None and client_ids is not None:
+            for idx, cid in enumerate(client_ids):
+                if cid in ema_dict:
+                    if ema_dict[cid].shape == vectors[idx].shape:
+                        vectors[idx] = ema_alpha * ema_dict[cid] + (1 - ema_alpha) * vectors[idx]
+                ema_dict[cid] = vectors[idx].copy()
+                
+        # L2-normalize vectors for cosine compatibility in Euclidean DBI
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        
+        # Weight delta scale correction: divide by the mean norm across all clients
+        # to preserve the relative scale of updates for active vs converged clients.
+        # This correction should only apply to weight deltas (i.e., when feature_importances is not None).
+        # If feature_importances is None, this is a pure feature importance clustering, where standard L2 normalization is correct.
+        if feature_importances is not None:
+            mean_norm = np.mean(norms)
+            if mean_norm > 1e-8:
+                scaled_vectors = vectors / mean_norm
+            else:
+                scaled_vectors = np.divide(vectors, norms, out=np.zeros_like(vectors), where=norms > 1e-8)
+        else:
+            scaled_vectors = np.divide(vectors, norms, out=np.zeros_like(vectors), where=norms > 1e-8)
+        
+        if feature_importances is not None:
+            # Feature importances L2-normalization
+            feats = np.array(feature_importances, dtype=np.float32)
+            f_norms = np.linalg.norm(feats, axis=1, keepdims=True)
+            normalized_feats = np.divide(feats, f_norms, out=np.zeros_like(feats), where=f_norms > 1e-8)
+            
+            # Weighted concatenation
+            w_feat = np.sqrt(feature_weight)
+            w_weight = np.sqrt(1.0 - feature_weight)
+            
+            features = np.hstack([
+                w_feat * normalized_feats,
+                w_weight * scaled_vectors
+            ])
+        else:
+            features = scaled_vectors
+        
+        dist_matrix = compute_cosine_distance_matrix(features)
+    else:
+        raise ValueError(f"Unknown metric: {metric}")
     
     n_clients = len(noisy_importances)
     if n_clients <= 2:
@@ -169,15 +288,23 @@ def perform_clustering(
     max_k = _resolve_max_clusters(n_clients, max_clusters)
     
     for k in range(2, max_k + 1):
-        labels = _fit_agglomerative(dist_matrix, k)
+        if metric == 'cosine':
+            clustering = AgglomerativeClustering(
+                n_clusters=k,
+                metric='euclidean',
+                linkage='ward',
+            )
+            labels = clustering.fit_predict(features)
+        else:
+            labels = _fit_agglomerative(dist_matrix, k)
         
         # Calculate Davies-Bouldin Index
         # DBI requires original coordinates or we can use the distance matrix indirectly.
         # But sklearn's davies_bouldin_score expects feature array, not distance matrix.
-        # So we pass the normalized distributions as features.
+        # So we pass the normalized distributions/raw vectors as features.
         try:
             score, _, _ = _candidate_score(
-                normalized,
+                features,
                 labels,
                 k,
                 complexity_penalty,
@@ -215,7 +342,7 @@ def perform_clustering(
 
 def run_clustering_pipeline(feature_json_path, output_json_path=None):
     """
-    Load extracted feature importances from JSON, perform EMD clustering,
+    Load extracted feature importances from JSON, perform Cosine Distance clustering,
     and return/save the cluster assignments.
     """
     import json
@@ -228,7 +355,7 @@ def run_clustering_pipeline(feature_json_path, output_json_path=None):
     client_ids = list(client_data.keys())
     noisy_importances = np.array([client_data[cid] for cid in client_ids])
     
-    print(f"Loaded {len(client_ids)} clients. Running Agglomerative Clustering with EMD...")
+    print(f"Loaded {len(client_ids)} clients. Running Agglomerative Clustering with Cosine Distance...")
     labels, k_star, multi_bubbles, isolated = perform_clustering(noisy_importances)
     
     # Create output dictionary
