@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+.env
+.venv
+venv/
+ENV/
+
+# Spring Boot (Gradle)
+.gradle/
+build/
+backend/.gradle/
+backend/build/
+!backend/gradle/wrapper/gradle-wrapper.jar
+*.class
+*.jar
+*.war
+*.ear
+
+# Runtime Logs
+logs/
+*.log
+*.pid
+*.pid.lock
+
+# Local Environment and Secrets
+backend/.env
+backend/.env.*
+!backend/.env.example
+backend/src/main/resources/application-secret*.yml
+backend/src/main/resources/application-*.local.yml
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+# Models and outputs
+# Ignore all runs except the baseline referenced in configurations
+outputs/runs/*
+!outputs/runs/20260522_025148_061195/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
