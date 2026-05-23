@@ -11,6 +11,7 @@ venv/
 ENV/
 
 # Spring Boot (Gradle)
+backend/
 .gradle/
 build/
 backend/.gradle/
