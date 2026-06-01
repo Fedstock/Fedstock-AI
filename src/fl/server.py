@@ -3,7 +3,7 @@ import flwr as fl
 import torch
 import os
 from concurrent.futures import ThreadPoolExecutor
-from src.fl.server_clustering import perform_clustering
+from src.fl.server_clustering import perform_clustering, assign_new_client
 
 def _emit(message, logger=None):
     if logger:
@@ -271,6 +271,179 @@ class BubbleServer:
             k_star=k_star,
             reset_history=True,
         )
+
+    def add_client(
+        self,
+        cid,
+        client,
+        metric='cosine',
+        warm_start=True,
+        train_epochs=0,
+        save_results=True,
+        logger=None,
+    ):
+        """
+        Incrementally onboard a single new client (e.g. a store that just
+        uploaded its data) into the existing clustering, without re-running the
+        full batch clustering over every client.
+
+        Steps:
+        1. Register the client and extract its noisy feature importance.
+        2. Assign it to the nearest existing bubble — or pair it with a lone
+           isolated client, or keep it isolated — via assign_new_client.
+        3. Warm-start its model from the joined bubble's already-trained
+           weights so it does not learn from scratch.
+        4. Optionally fine-tune it locally and persist an updated clustering
+           record.
+
+        Returns the assign_new_client result dict (with updated bubbles/isolated).
+        """
+        self.clients[cid] = client
+
+        importance = np.array(client.extract_noisy_importance(), dtype=np.float32)
+        self.noisy_importances[cid] = importance
+
+        existing_importances = {
+            other: imp for other, imp in self.noisy_importances.items() if other != cid
+        }
+        result = assign_new_client(
+            importance,
+            existing_importances,
+            self.bubbles,
+            self.isolated,
+            metric=metric,
+            ema_dict=self.ema_dict,
+            new_client_id=cid,
+        )
+        self.bubbles = result["bubbles"]
+        self.isolated = result["isolated"]
+
+        detail = ""
+        if result["bubble_index"] is not None:
+            detail += f" (bubble {result['bubble_index']})"
+        if result["partner"]:
+            detail += f", paired with {result['partner']}"
+        if result["distance"] is not None and result["threshold"] is not None:
+            detail += f", distance={result['distance']:.4f}, threshold={result['threshold']:.4f}"
+        _emit(f"[Add Client] {cid} -> {result['assigned_to']}{detail}", logger)
+
+        if warm_start:
+            warm_weights = self._warm_start_weights_for(cid, result)
+            if warm_weights is not None:
+                if self.shared_lstm_weights is not None:
+                    client.set_shared_parameters(self._copy_parameters(warm_weights))
+                else:
+                    client.set_parameters(self._copy_parameters(warm_weights))
+                _emit(f"[Add Client] {cid} warm-started from existing weights.", logger)
+
+        if train_epochs > 0:
+            if self.shared_lstm_weights is not None:
+                client.fit_shared_lstm(
+                    parameters=client.get_shared_parameters(),
+                    config={"epochs": train_epochs, "current_round": 1, "total_rounds": 1},
+                )
+            else:
+                client.fit(
+                    parameters=client.get_parameters({}),
+                    config={"epochs": train_epochs, "current_round": 1, "total_rounds": 1},
+                )
+            _emit(f"[Add Client] {cid} locally trained for {train_epochs} epoch(s).", logger)
+
+        if save_results:
+            self.save_clustering_results(
+                os.path.join(self.output_dir, "clustering_results.json"),
+                stage="incremental_merge",
+                round_num=None,
+            )
+
+        return result
+
+    def _warm_start_weights_for(self, new_cid, result):
+        """
+        Pick warm-start weights for a newly assigned client.
+
+        For a bubble (or a freshly formed two-client bubble) we reuse an
+        existing member's already-synchronized weights, mirroring how
+        save_models treats the first bubble member as the shared representative.
+        Isolated clients fall back to the shared backbone / global weights.
+        """
+        bubble_index = result.get("bubble_index")
+        if bubble_index is not None and 0 <= bubble_index < len(self.bubbles):
+            for member in self.bubbles[bubble_index]:
+                if member != new_cid and member in self.clients:
+                    representative = self.clients[member]
+                    if self.shared_lstm_weights is not None:
+                        return representative.get_shared_parameters()
+                    return representative.get_parameters({})
+
+        if self.shared_lstm_weights is not None:
+            return self.shared_lstm_weights
+        return self.shared_global_weights
+
+    def get_cluster_report(self, cid, feature_names=None, top_n=3):
+        """
+        Build the "similar-store comparison report" for a single client so the
+        frontend can render it directly.
+
+        Returns the client's own dominant features (its "store type"), the
+        cluster it belongs to, the other members of that cluster, and the
+        cluster's shared dominant features.
+
+        feature_names : optional list mapping importance-vector indices to
+            human-readable names (e.g. CANDIDATE_FEATURE_COLS). When omitted,
+            generic "feature_{i}" labels are returned so callers can still map
+            them later.
+        """
+        if cid not in self.noisy_importances:
+            raise KeyError(f"No feature importance recorded for client: {cid}")
+
+        def _label(idx):
+            if feature_names is not None and idx < len(feature_names):
+                return feature_names[idx]
+            return f"feature_{idx}"
+
+        def _rank(vector, value_key):
+            vector = np.asarray(vector, dtype=np.float32).reshape(-1)
+            order = np.argsort(vector)[::-1][:top_n]
+            return [
+                {"feature": _label(int(i)), value_key: round(float(vector[i]), 4)}
+                for i in order
+            ]
+
+        # Locate the client: a multi-client bubble, or the isolated list.
+        cluster_id = None
+        members = [cid]
+        is_isolated = True
+        for b_idx, bubble in enumerate(self.bubbles):
+            if cid in bubble:
+                cluster_id = b_idx
+                members = list(bubble)
+                is_isolated = False
+                break
+        if is_isolated and cid in self.isolated:
+            # Isolated clients each form their own cluster after the bubbles.
+            cluster_id = len(self.bubbles) + self.isolated.index(cid)
+
+        # Cluster-level shared importance = mean over members we have vectors for.
+        member_vectors = [
+            np.asarray(self.noisy_importances[m], dtype=np.float32).reshape(-1)
+            for m in members
+            if m in self.noisy_importances
+        ]
+        common_features = []
+        if member_vectors:
+            mean_vector = np.mean(member_vectors, axis=0)
+            common_features = _rank(mean_vector, "avg_importance")
+
+        return {
+            "client_id": cid,
+            "cluster_id": cluster_id,
+            "is_isolated": is_isolated,
+            "my_top_features": _rank(self.noisy_importances[cid], "importance"),
+            "cluster_members": members,
+            "cluster_size": len(members),
+            "cluster_common_features": common_features,
+        }
 
     def _build_clustering_record(
         self,

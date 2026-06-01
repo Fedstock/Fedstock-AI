@@ -5,47 +5,48 @@ __pycache__/
 *.so
 .Python
 env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 .env
 .venv
 venv/
 ENV/
 
-# Temporary files created during extraction
-temp/
-*.txt
-*.pdf
-!outputs/latest_run.txt
-temp_*.py
-scratch/
+# Spring Boot (Gradle)
+backend/
+.gradle/
+build/
+backend/.gradle/
+backend/build/
+!backend/gradle/wrapper/gradle-wrapper.jar
+*.class
+*.jar
+*.war
+*.ear
 
-# Models and data
+# Runtime Logs
+logs/
 *.log
-fedstock_data/
+*.pid
+*.pid.lock
 
-# Ignore all runs except the latest (referenced in outputs/latest_run.txt)
-outputs/runs/*
-!outputs/runs/20260522_025148_061195/
+# Local Environment and Secrets
+backend/.env
+backend/.env.*
+!backend/.env.example
+backend/src/main/resources/application-secret*.yml
+backend/src/main/resources/application-*.local.yml
 
 # IDEs and Editors
 .vscode/
 .idea/
-*.swp
-*.swo
+*.iws
+*.iml
+*.ipr
+out/
+
+# Models and outputs
+# Ignore all runs except the baseline referenced in configurations
+outputs/runs/*
+!outputs/runs/20260522_025148_061195/
 
 # OS generated files
 .DS_Store
@@ -55,8 +56,3 @@ outputs/runs/*
 .Trashes
 ehthumbs.db
 Thumbs.db
-
-# Documentation
-*.md
-!README.md
-!evaluation_report.md

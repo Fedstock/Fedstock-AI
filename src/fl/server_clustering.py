@@ -340,6 +340,217 @@ def perform_clustering(
         
     return best_labels, best_k, multi_client_bubbles, isolated_clients
 
+
+def _client_representation(importance, metric):
+    """
+    Build the single-vector representation used for distance comparisons,
+    matching how perform_clustering treats feature importances per metric.
+    """
+    vector = np.asarray(importance, dtype=np.float32).reshape(-1)
+    if metric == 'emd':
+        return normalize_importance([vector])[0]
+    return vector
+
+
+def _point_distance(u, v, metric):
+    """
+    Distance between two client representations, consistent with the matrices
+    built in compute_emd_distance_matrix / compute_cosine_distance_matrix.
+    """
+    if metric == 'emd':
+        support = np.arange(len(u))
+        return float(wasserstein_distance(support, support, u_weights=u, v_weights=v))
+
+    # cosine distance (1 - cosine similarity); zero vectors are fully dissimilar
+    norm_u = np.linalg.norm(u)
+    norm_v = np.linalg.norm(v)
+    if norm_u < 1e-12 or norm_v < 1e-12:
+        return 1.0
+    similarity = float(np.dot(u, v) / (norm_u * norm_v))
+    return float(np.clip(1.0 - similarity, 0.0, 2.0))
+
+
+def _isolation_threshold(existing_representations, metric, isolation_std_multiplier):
+    """
+    Reproduce the batch isolation threshold used in _merge_non_isolated_singletons
+    so incremental assignment stays consistent with the initial clustering.
+    """
+    if len(existing_representations) < 2:
+        return None
+
+    vectors = np.array(existing_representations, dtype=np.float32)
+    if metric == 'emd':
+        dist_matrix = compute_emd_distance_matrix(vectors)
+    else:
+        dist_matrix = compute_cosine_distance_matrix(vectors)
+
+    nonzero_distances = dist_matrix[dist_matrix > 0]
+    if nonzero_distances.size == 0:
+        return None
+    return (
+        float(nonzero_distances.mean())
+        + float(nonzero_distances.std()) * isolation_std_multiplier
+    )
+
+
+def assign_new_client(
+    new_importance,
+    existing_importances,
+    bubbles,
+    isolated,
+    metric='cosine',
+    isolation_std_multiplier=0.75,
+    ema_dict=None,
+    new_client_id=None,
+    ema_alpha=0.8,
+):
+    """
+    Incrementally place a single newly-arrived client into the existing
+    clustering without re-running the full batch perform_clustering.
+
+    The new client's noisy feature importance is compared (average linkage,
+    same metric as the initial clustering) against every existing multi-client
+    bubble and every isolated client. It joins the nearest cluster when that
+    cluster is within the batch isolation threshold; otherwise it stays
+    isolated for personalized FL. Matching a lone isolated client forms a new
+    two-client bubble, mirroring _merge_non_isolated_singletons.
+
+    Parameters
+    ----------
+    new_importance : array-like
+        Noisy feature importance vector of the new client.
+    existing_importances : dict
+        {client_id: importance vector} for all currently known clients.
+    bubbles : list[list[str]]
+        Current multi-client bubbles (each a list of client ids).
+    isolated : list[str]
+        Current isolated client ids.
+
+    Returns
+    -------
+    dict with keys:
+        assigned_to    : 'bubble' | 'new_bubble' | 'isolated'
+        bubble_index   : index into the returned bubbles, or None if isolated
+        partner        : the isolated client paired with (for 'new_bubble')
+        distance       : nearest cluster distance (None if no comparison made)
+        threshold      : isolation threshold used (None if not computable)
+        bubbles        : updated list of multi-client bubbles
+        isolated       : updated list of isolated client ids
+    """
+    bubbles = [list(bubble) for bubble in bubbles]
+    isolated = list(isolated)
+
+    new_repr = _client_representation(new_importance, metric)
+
+    # Pre-compute every existing client's representation once.
+    existing_repr = {
+        cid: _client_representation(imp, metric)
+        for cid, imp in existing_importances.items()
+    }
+
+    if ema_dict is not None and new_client_id is not None:
+        ema_dict[new_client_id] = new_repr.copy()
+
+    # No prior clients to compare against -> nothing to merge into.
+    if not existing_repr:
+        if new_client_id is not None and new_client_id not in isolated:
+            isolated.append(new_client_id)
+        return {
+            "assigned_to": "isolated",
+            "bubble_index": None,
+            "partner": None,
+            "distance": None,
+            "threshold": None,
+            "bubbles": bubbles,
+            "isolated": isolated,
+        }
+
+    threshold = _isolation_threshold(
+        list(existing_repr.values()), metric, isolation_std_multiplier
+    )
+
+    # Candidate clusters: every multi-client bubble, then every isolated client.
+    candidates = []
+    for b_idx, bubble in enumerate(bubbles):
+        members = [cid for cid in bubble if cid in existing_repr]
+        if not members:
+            continue
+        avg_distance = float(
+            np.mean([_point_distance(new_repr, existing_repr[cid], metric) for cid in members])
+        )
+        candidates.append({"kind": "bubble", "index": b_idx, "distance": avg_distance})
+
+    for cid in isolated:
+        if cid not in existing_repr:
+            continue
+        distance = _point_distance(new_repr, existing_repr[cid], metric)
+        candidates.append({"kind": "isolated", "partner": cid, "distance": distance})
+
+    if not candidates:
+        if new_client_id is not None and new_client_id not in isolated:
+            isolated.append(new_client_id)
+        return {
+            "assigned_to": "isolated",
+            "bubble_index": None,
+            "partner": None,
+            "distance": None,
+            "threshold": threshold,
+            "bubbles": bubbles,
+            "isolated": isolated,
+        }
+
+    nearest = min(candidates, key=lambda c: c["distance"])
+    nearest_distance = nearest["distance"]
+
+    # Without a data-driven threshold (fewer than 2 prior clients) we cannot
+    # judge similarity reliably, so we keep the new client isolated.
+    close_enough = threshold is not None and nearest_distance <= threshold
+
+    if close_enough and nearest["kind"] == "bubble":
+        b_idx = nearest["index"]
+        if new_client_id is not None and new_client_id not in bubbles[b_idx]:
+            bubbles[b_idx].append(new_client_id)
+        return {
+            "assigned_to": "bubble",
+            "bubble_index": b_idx,
+            "partner": None,
+            "distance": nearest_distance,
+            "threshold": threshold,
+            "bubbles": bubbles,
+            "isolated": isolated,
+        }
+
+    if close_enough and nearest["kind"] == "isolated":
+        partner = nearest["partner"]
+        if partner in isolated:
+            isolated.remove(partner)
+        new_bubble = [partner]
+        if new_client_id is not None:
+            new_bubble.append(new_client_id)
+        bubbles.append(new_bubble)
+        return {
+            "assigned_to": "new_bubble",
+            "bubble_index": len(bubbles) - 1,
+            "partner": partner,
+            "distance": nearest_distance,
+            "threshold": threshold,
+            "bubbles": bubbles,
+            "isolated": isolated,
+        }
+
+    if new_client_id is not None and new_client_id not in isolated:
+        isolated.append(new_client_id)
+    return {
+        "assigned_to": "isolated",
+        "bubble_index": None,
+        "partner": None,
+        "distance": nearest_distance,
+        "threshold": threshold,
+        "bubbles": bubbles,
+        "isolated": isolated,
+    }
+
+
 def run_clustering_pipeline(feature_json_path, output_json_path=None):
     """
     Load extracted feature importances from JSON, perform Cosine Distance clustering,
