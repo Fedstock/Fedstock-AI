@@ -1,0 +1,203 @@
+item_id,item_name_ko,display_category,weather_tags,dept_id,cat_id,mapping_note
+FOODS_1_004,삼각김밥,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_012,도시락,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_018,샌드위치,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_019,햄버거,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_032,핫바,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_042,소시지,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_043,어묵바,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_046,즉석밥,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_055,컵라면,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_082,봉지라면,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_085,참치캔,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_086,카레,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_096,수프,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_099,시리얼,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_110,식빵,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_113,크림빵,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_161,초코빵,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_162,쿠키,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_170,초콜릿,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_173,젤리,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_184,견과류,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_204,요거트,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_1_218,치즈,간편식,비|한파,FOODS_1,FOODS,demo_display_name
+FOODS_2_013,생수,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_016,탄산음료,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_019,제로 탄산음료,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_021,이온음료,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_054,에너지드링크,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_128,캔커피,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_152,아이스커피,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_164,과일주스,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_181,녹차,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_197,보리차,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_204,두유,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_222,요구르트,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_244,아이스티,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_247,스포츠음료,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_276,비타민음료,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_285,우유음료,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_293,생수 대용량,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_294,탄산음료 대용량,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_325,제로 탄산음료 대용량,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_326,이온음료 대용량,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_347,에너지드링크 대용량,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_360,캔커피 대용량,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_364,아이스커피 대용량,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_368,과일주스 대용량,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_371,녹차 대용량,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_2_398,보리차 대용량,음료,맑음|더움,FOODS_2,FOODS,demo_display_name
+FOODS_3_007,바닐라 아이스크림,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_030,초코 아이스크림,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_042,딸기 아이스크림,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_080,냉동만두,냉동식품,비|한파,FOODS_3,FOODS,demo_display_name
+FOODS_3_090,바닐라 아이스크림,냉동식품,맑음|더움,FOODS_3,FOODS,demo_display_name
+FOODS_3_120,얼음컵,냉동식품,맑음|더움,FOODS_3,FOODS,demo_display_name
+FOODS_3_202,냉장 커피,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_226,냉동만두,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_234,냉동피자,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_252,딸기 아이스크림,냉동식품,맑음|더움,FOODS_3,FOODS,demo_display_name
+FOODS_3_288,컵라면 대용량,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_318,즉석 떡볶이,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_376,냉장 파스타,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_377,냉장 샐러드,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_412,핫도그,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_462,치킨너겟,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_491,냉동 감자튀김,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_541,냉장 주먹밥,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_547,바닐라 아이스크림 대용량,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_555,냉장 탄산음료,냉장음료,맑음|더움,FOODS_3,FOODS,demo_display_name
+FOODS_3_586,초코 아이스크림,냉동식품,맑음|더움,FOODS_3,FOODS,demo_display_name
+FOODS_3_587,냉동 볶음밥,냉동식품,비|한파,FOODS_3,FOODS,demo_display_name
+FOODS_3_607,얼음컵,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_635,냉장 탄산음료,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_668,냉장 커피 대용량,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_681,냉동만두 대용량,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_694,냉동피자 대용량,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_711,냉동 볶음밥,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_714,컵라면,즉석식,비|한파,FOODS_3,FOODS,demo_display_name
+FOODS_3_723,즉석 떡볶이 대용량,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_804,냉장 파스타 대용량,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+FOODS_3_808,냉장 샐러드 대용량,냉장/냉동식품,맑음|더움|비,FOODS_3,FOODS,demo_display_name
+HOBBIES_1_008,볼펜,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_014,노트,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_015,메모지,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_016,색연필,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_019,사인펜,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_032,스케치북,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_048,풀,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_067,테이프,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_103,가위,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_158,파일철,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_178,스티커,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_233,카드 게임,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_234,퍼즐,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_244,미니 완구,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_254,블록 완구,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_256,배터리,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_268,이어폰 케이블,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_278,충전 케이블,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_312,볼펜 대용량,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_323,노트 대용량,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_341,메모지 대용량,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_348,색연필 대용량,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_354,사인펜 대용량,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_370,스케치북 대용량,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_371,풀 대용량,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_1_404,테이프 대용량,문구/완구,일반,HOBBIES_1,HOBBIES,demo_display_name
+HOBBIES_2_009,반려동물 간식,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_028,반려동물 캔,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_029,장난감 공,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_032,미니 피규어,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_033,여행용 파우치,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_036,스포츠 밴드,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_043,캠핑 소품,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_053,낚시 소품,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_059,DIY 키트,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_075,공예 키트,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_076,보드게임,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_083,액세서리 부품,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_085,반려동물 간식 대용량,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_088,반려동물 캔 대용량,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_089,장난감 공 대용량,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_115,미니 피규어 대용량,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_117,여행용 파우치 대용량,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_120,스포츠 밴드 대용량,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_121,캠핑 소품 대용량,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_124,낚시 소품 대용량,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_129,DIY 키트 대용량,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_131,공예 키트 대용량,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOBBIES_2_142,보드게임 대용량,취미/반려용품,일반,HOBBIES_2,HOBBIES,demo_display_name
+HOUSEHOLD_1_019,화장지,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_083,물티슈,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_110,키친타월,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_118,세탁세제,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_151,섬유유연제,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_179,주방세제,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_191,락스,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_198,청소포,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_234,종량제 봉투,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_277,지퍼백,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_303,위생장갑,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_327,알루미늄 호일,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_334,랩,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_339,건전지,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_351,멀티탭,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_373,전구,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_389,방향제,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_399,탈취제,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_409,화장지 대용량,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_418,물티슈 대용량,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_427,키친타월 대용량,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_437,세탁세제 대용량,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_439,섬유유연제 대용량,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_441,주방세제 대용량,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_459,락스 대용량,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_465,청소포 대용량,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_474,종량제 봉투 대용량,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_514,지퍼백 대용량,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_517,위생장갑 대용량,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_521,알루미늄 호일 대용량,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_1_535,랩 대용량,생활필수품,비|눈|한파,HOUSEHOLD_1,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_002,샴푸,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_044,린스,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_062,바디워시,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_074,비누,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_110,치약,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_115,칫솔,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_118,면도기,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_140,생리대,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_142,기저귀,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_159,손소독제,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_160,마스크,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_176,밴드,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_193,소독티슈,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_197,수건,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_199,수세미,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_203,고무장갑,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_212,욕실세정제,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_213,주방세정제,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_239,샴푸 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_266,린스 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_294,바디워시 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_299,비누 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_301,치약 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_341,칫솔 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_342,면도기 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_348,생리대 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_350,기저귀 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_354,손소독제 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_366,마스크 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_371,밴드 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_389,소독티슈 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_409,수건 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_410,수세미 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_421,고무장갑 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_427,욕실세정제 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_440,주방세정제 대용량,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_442,샴푸 기획팩,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_447,린스 기획팩,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_470,바디워시 기획팩,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_483,비누 기획팩,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
+HOUSEHOLD_2_510,치약 기획팩,욕실/주방용품,비|눈|한파,HOUSEHOLD_2,HOUSEHOLD,demo_display_name
