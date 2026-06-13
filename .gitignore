@@ -45,7 +45,7 @@ out/
 
 # Models and outputs
 # Ignore all runs except the baseline referenced in configurations
-outputs/runs/*
+outputs/*
 !outputs/runs/20260522_025148_061195/
 
 # OS generated files
@@ -56,3 +56,7 @@ outputs/runs/*
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# md
+*.md
+!README.md

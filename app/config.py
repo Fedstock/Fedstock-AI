@@ -7,6 +7,7 @@ class Settings:
     env: str
     aws_region: str
     artifact_bucket: str | None
+    api_bearer_token: str | None
     model_table: str
     round_table: str
     participant_update_table: str
@@ -18,6 +19,7 @@ def get_settings() -> Settings:
         env=os.getenv("ENV", "local"),
         aws_region=os.getenv("AWS_REGION", "ap-northeast-2"),
         artifact_bucket=os.getenv("ARTIFACT_BUCKET"),
+        api_bearer_token=os.getenv("API_BEARER_TOKEN"),
         model_table=os.getenv("MODEL_TABLE", "fl-mlops-prod-model-version-table"),
         round_table=os.getenv("ROUND_TABLE", "fl-mlops-prod-round-table"),
         participant_update_table=os.getenv(
