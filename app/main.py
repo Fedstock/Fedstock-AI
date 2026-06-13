@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+import shutil
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -11,12 +13,14 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, ValidationError
 from sklearn.preprocessing import RobustScaler, StandardScaler
 
 from app.config import get_settings
-from src.fl.server_clustering import assign_new_client
+from src.fl.server_clustering import assign_new_client, perform_clustering
 from src.models.lstm import LightweightLSTM
 
 
@@ -123,6 +127,35 @@ def _load_item_master() -> dict[str, dict[str, Any]]:
 ITEM_MASTER = _load_item_master()
 
 
+class ClusterAssignmentRequest(BaseModel):
+    scope: str
+    roundId: str
+    clientId: str
+    sampleCount: float
+    featureNames: list[str]
+    featureImportance: list[float]
+    expectedClientCount: int | None = None
+
+
+class ClusterAssignmentResponse(BaseModel):
+    status: str
+    clientId: str
+    scope: str
+    assignedTo: str | None
+    clusterId: int | None
+    clusterMembers: list[str]
+    queueStatus: str
+    distance: float | None
+    threshold: float | None
+    message: str
+
+
+CLUSTER_ASSIGNMENT_QUEUES: dict[str, dict[str, Any]] = {}
+CLUSTER_ASSIGNMENT_COMPLETED: dict[str, dict[str, dict[str, Any]]] = {}
+CLIENT_CLUSTER_ASSIGNMENTS: dict[str, dict[str, Any]] = {}
+FL_MODEL_SYNC_QUEUES: dict[str, dict[int, dict[str, Any]]] = {}
+
+
 app = FastAPI(title="Fedstock AI API")
 app.add_middleware(
     CORSMiddleware,
@@ -168,6 +201,138 @@ def _validation_item(
         "status": status,
         "message": message,
     }
+
+
+def _verify_bearer_token(authorization: str | None = Header(default=None)) -> None:
+    expected_token = get_settings().api_bearer_token
+    if not expected_token:
+        raise HTTPException(status_code=500, detail="API_BEARER_TOKEN이 설정되어 있지 않습니다.")
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Bearer Token 인증이 필요합니다.")
+    supplied_token = authorization.removeprefix("Bearer ").strip()
+    if supplied_token != expected_token:
+        raise HTTPException(status_code=401, detail="Bearer Token이 올바르지 않습니다.")
+
+
+def _parse_cluster_assignment_request(raw: dict[str, Any]) -> ClusterAssignmentRequest:
+    required = ["scope", "roundId", "clientId", "sampleCount", "featureNames", "featureImportance"]
+    missing = [field for field in required if field not in raw or raw[field] is None]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"필수 필드가 누락되었습니다: {', '.join(missing)}")
+    try:
+        payload = ClusterAssignmentRequest(**raw)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"요청 형식이 올바르지 않습니다: {exc}") from exc
+
+    if payload.scope not in {"single_client", "all_clients"}:
+        raise HTTPException(status_code=400, detail="지원하지 않는 scope입니다.")
+    if not payload.roundId.strip():
+        raise HTTPException(status_code=400, detail="roundId는 비어 있을 수 없습니다.")
+    if not payload.clientId.strip():
+        raise HTTPException(status_code=400, detail="clientId는 비어 있을 수 없습니다.")
+    if payload.sampleCount <= 0:
+        raise HTTPException(status_code=400, detail="sampleCount는 0보다 커야 합니다.")
+    if payload.scope == "all_clients" and (payload.expectedClientCount is None or payload.expectedClientCount <= 0):
+        raise HTTPException(status_code=400, detail="all_clients scope에는 expectedClientCount가 필요합니다.")
+    return payload
+
+
+def _importance_vector_from_payload(payload: ClusterAssignmentRequest) -> np.ndarray:
+    if len(payload.featureNames) != len(payload.featureImportance):
+        raise HTTPException(status_code=400, detail="featureNames와 featureImportance 길이가 일치하지 않습니다.")
+
+    feature_names = [str(name) for name in payload.featureNames]
+    if len(set(feature_names)) != len(feature_names):
+        raise HTTPException(status_code=400, detail="featureNames에 중복 항목이 있습니다.")
+
+    selected = set(SELECTED_FEATURES)
+    supplied = set(feature_names)
+    if supplied != selected:
+        missing = sorted(selected - supplied)
+        extra = sorted(supplied - selected)
+        detail = "서버 selectedFeatures와 featureNames가 일치하지 않습니다."
+        if missing:
+            detail += f" 누락: {', '.join(missing)}."
+        if extra:
+            detail += f" 추가: {', '.join(extra)}."
+        raise HTTPException(status_code=400, detail=detail)
+
+    by_feature = {name: float(value) for name, value in zip(feature_names, payload.featureImportance)}
+    vector = np.asarray([by_feature[name] for name in SELECTED_FEATURES], dtype=np.float32)
+    if not np.isfinite(vector).all():
+        raise HTTPException(status_code=400, detail="featureImportance에는 유한한 숫자만 사용할 수 있습니다.")
+    return vector
+
+
+def _safe_path_component(value: str, field_name: str) -> str:
+    cleaned = str(value).strip()
+    if not cleaned or not re.fullmatch(r"[A-Za-z0-9_.-]+", cleaned):
+        raise HTTPException(status_code=400, detail=f"{field_name}에는 영문, 숫자, _, -, . 만 사용할 수 있습니다.")
+    return cleaned
+
+
+def _validate_pt_upload(model_file: UploadFile) -> None:
+    filename = model_file.filename or ""
+    if not filename.lower().endswith(".pt"):
+        raise HTTPException(status_code=400, detail="model_file은 .pt 파일이어야 합니다.")
+
+
+def _fl_sync_root(round_id: str) -> Path:
+    safe_round = _safe_path_component(round_id, "round_id")
+    return OUTPUTS_DIR / "fl_sync" / safe_round
+
+
+def _save_uploaded_model(model_file: UploadFile, client_id: str, round_id: str) -> Path:
+    _validate_pt_upload(model_file)
+    safe_client = _safe_path_component(client_id, "client_id")
+    upload_dir = _fl_sync_root(round_id) / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_path = upload_dir / f"client_{safe_client}.pt"
+    with upload_path.open("wb") as handle:
+        shutil.copyfileobj(model_file.file, handle)
+    if upload_path.stat().st_size <= 0:
+        raise HTTPException(status_code=400, detail="model_file이 비어 있습니다.")
+    return upload_path
+
+
+def _load_state_dict(path: Path) -> dict[str, torch.Tensor]:
+    try:
+        state = torch.load(path, map_location="cpu")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f".pt 모델 파일을 읽을 수 없습니다: {exc}") from exc
+    if not isinstance(state, dict) or not state:
+        raise HTTPException(status_code=400, detail=".pt 모델 파일은 비어 있지 않은 state_dict 형식이어야 합니다.")
+    tensor_state = {}
+    for key, value in state.items():
+        if not torch.is_tensor(value):
+            raise HTTPException(status_code=400, detail=f"state_dict 값은 Tensor여야 합니다: {key}")
+        tensor_state[str(key)] = value.detach().cpu().float()
+    return tensor_state
+
+
+def _weighted_average_state_dicts(items: list[tuple[dict[str, torch.Tensor], float]]) -> dict[str, torch.Tensor]:
+    if not items:
+        raise HTTPException(status_code=500, detail="평균할 모델이 없습니다.")
+    reference_keys = set(items[0][0])
+    for state, _ in items:
+        if set(state) != reference_keys:
+            raise HTTPException(status_code=500, detail="업로드된 모델 state_dict key가 서로 다릅니다.")
+    total_weight = sum(max(0.0, float(weight)) for _, weight in items)
+    if total_weight <= 0:
+        raise HTTPException(status_code=400, detail="sample_weight 합계는 0보다 커야 합니다.")
+
+    averaged: dict[str, torch.Tensor] = {}
+    for key in sorted(reference_keys):
+        weighted_sum = None
+        reference_shape = items[0][0][key].shape
+        for state, weight in items:
+            tensor = state[key]
+            if tensor.shape != reference_shape:
+                raise HTTPException(status_code=500, detail=f"업로드된 모델 Tensor shape가 서로 다릅니다: {key}")
+            contribution = tensor * (float(weight) / total_weight)
+            weighted_sum = contribution if weighted_sum is None else weighted_sum + contribution
+        averaged[key] = weighted_sum
+    return averaged
 
 
 def _csv_status(
@@ -562,6 +727,320 @@ def _cluster_assignment_for_client(
     }
 
 
+def _cluster_assignment_for_importance(
+    client_id: str,
+    importance: np.ndarray,
+    existing_importances: dict[str, np.ndarray],
+    bubbles: list[list[str]],
+    isolated: list[str],
+    known_assignments: dict[str, int],
+) -> dict[str, Any]:
+    if not existing_importances or not bubbles:
+        raise HTTPException(status_code=404, detail="기준 클러스터 또는 기준 feature importance가 없습니다.")
+
+    for existing_client_id, existing_vector in existing_importances.items():
+        if len(existing_vector) != len(importance):
+            raise HTTPException(
+                status_code=500,
+                detail=f"기준 feature importance 길이가 현재 selectedFeatures와 맞지 않습니다: {existing_client_id}",
+            )
+
+    if client_id in existing_importances:
+        cluster_id = known_assignments.get(client_id)
+        if cluster_id is not None and 0 <= cluster_id < len(bubbles):
+            members = list(bubbles[cluster_id])
+        else:
+            members = [client_id]
+        return {
+            "assignedTo": "known_client",
+            "clusterId": cluster_id,
+            "clusterMembers": members,
+            "distance": None,
+            "threshold": None,
+        }
+
+    result = assign_new_client(
+        importance,
+        existing_importances,
+        bubbles,
+        isolated,
+        metric="cosine",
+        new_client_id=client_id,
+    )
+    bubble_index = result.get("bubble_index")
+    if bubble_index is not None and 0 <= int(bubble_index) < len(result["bubbles"]):
+        members = list(result["bubbles"][int(bubble_index)])
+    else:
+        members = [client_id]
+
+    return {
+        "assignedTo": result.get("assigned_to"),
+        "clusterId": int(bubble_index) if bubble_index is not None else None,
+        "clusterMembers": members,
+        "distance": round(float(result["distance"]), 4) if result.get("distance") is not None else None,
+        "threshold": round(float(result["threshold"]), 4) if result.get("threshold") is not None else None,
+    }
+
+
+def _assignment_response(
+    *,
+    status: str,
+    payload: ClusterAssignmentRequest,
+    assigned_to: str | None,
+    cluster_id: int | None,
+    cluster_members: list[str],
+    queue_status: str,
+    distance: float | None,
+    threshold: float | None,
+    message: str,
+) -> dict[str, Any]:
+    return ClusterAssignmentResponse(
+        status=status,
+        clientId=payload.clientId,
+        scope=payload.scope,
+        assignedTo=assigned_to,
+        clusterId=cluster_id,
+        clusterMembers=cluster_members,
+        queueStatus=queue_status,
+        distance=distance,
+        threshold=threshold,
+        message=message,
+    ).model_dump()
+
+
+def _handle_single_client_assignment(payload: ClusterAssignmentRequest, importance: np.ndarray) -> dict[str, Any]:
+    existing_importances = _load_feature_importances()
+    bubbles, isolated, known_assignments = _load_cluster_state()
+    assignment = _cluster_assignment_for_importance(
+        payload.clientId,
+        importance,
+        existing_importances,
+        bubbles,
+        isolated,
+        known_assignments,
+    )
+    CLIENT_CLUSTER_ASSIGNMENTS[payload.clientId] = {
+        "assignedTo": assignment["assignedTo"],
+        "clusterId": assignment["clusterId"],
+        "clusterMembers": assignment["clusterMembers"],
+    }
+    return _assignment_response(
+        status="assigned",
+        payload=payload,
+        assigned_to=assignment["assignedTo"],
+        cluster_id=assignment["clusterId"],
+        cluster_members=assignment["clusterMembers"],
+        queue_status="completed",
+        distance=assignment["distance"],
+        threshold=assignment["threshold"],
+        message="클러스터 배정이 완료되었습니다.",
+    )
+
+
+def _handle_all_clients_assignment(payload: ClusterAssignmentRequest, importance: np.ndarray) -> dict[str, Any]:
+    completed_round = CLUSTER_ASSIGNMENT_COMPLETED.get(payload.roundId)
+    if completed_round is not None:
+        if payload.clientId in completed_round:
+            raise HTTPException(status_code=409, detail="이미 완료된 roundId/clientId 요청입니다.")
+        raise HTTPException(status_code=409, detail="이미 완료된 roundId입니다.")
+
+    round_state = CLUSTER_ASSIGNMENT_QUEUES.setdefault(
+        payload.roundId,
+        {
+            "expectedClientCount": payload.expectedClientCount,
+            "clients": {},
+        },
+    )
+    if round_state["expectedClientCount"] != payload.expectedClientCount:
+        raise HTTPException(status_code=409, detail="동일 roundId의 expectedClientCount가 일치하지 않습니다.")
+
+    clients: dict[str, dict[str, Any]] = round_state["clients"]
+    if payload.clientId in clients:
+        raise HTTPException(status_code=409, detail="동일 roundId에 같은 clientId가 이미 등록되어 있습니다.")
+    clients[payload.clientId] = {
+        "payload": payload,
+        "importance": importance,
+    }
+
+    expected_count = int(payload.expectedClientCount or 0)
+    if len(clients) < expected_count:
+        return _assignment_response(
+            status="queued",
+            payload=payload,
+            assigned_to=None,
+            cluster_id=None,
+            cluster_members=[],
+            queue_status="waiting",
+            distance=None,
+            threshold=None,
+            message=f"클러스터링 대기 중입니다. ({len(clients)}/{expected_count})",
+        )
+
+    client_ids = list(clients)
+    vectors = np.array([clients[cid]["importance"] for cid in client_ids], dtype=np.float32)
+    labels, _, _, _ = perform_clustering(
+        vectors,
+        max_clusters=8,
+        complexity_penalty=0.15,
+        singleton_penalty=0.20,
+        metric="cosine",
+    )
+    grouped: dict[int, list[str]] = {}
+    for index, label in enumerate(labels):
+        grouped.setdefault(int(label), []).append(client_ids[index])
+
+    completed: dict[str, dict[str, Any]] = {}
+    for index, cid in enumerate(client_ids):
+        cluster_id = int(labels[index])
+        members = grouped[cluster_id]
+        completed[cid] = {
+            "assignedTo": "bubble" if len(members) > 1 else "isolated",
+            "clusterId": cluster_id if len(members) > 1 else None,
+            "clusterMembers": members,
+            "distance": None,
+            "threshold": None,
+        }
+        CLIENT_CLUSTER_ASSIGNMENTS[cid] = {
+            "assignedTo": completed[cid]["assignedTo"],
+            "clusterId": completed[cid]["clusterId"],
+            "clusterMembers": completed[cid]["clusterMembers"],
+        }
+
+    CLUSTER_ASSIGNMENT_COMPLETED[payload.roundId] = completed
+    CLUSTER_ASSIGNMENT_QUEUES.pop(payload.roundId, None)
+    assignment = completed[payload.clientId]
+    return _assignment_response(
+        status="assigned",
+        payload=payload,
+        assigned_to=assignment["assignedTo"],
+        cluster_id=assignment["clusterId"],
+        cluster_members=assignment["clusterMembers"],
+        queue_status="completed",
+        distance=assignment["distance"],
+        threshold=assignment["threshold"],
+        message="전체 클라이언트 초기 클러스터링이 완료되었습니다.",
+    )
+
+
+def _resolve_client_assignment(client_id: str) -> dict[str, Any]:
+    if client_id in CLIENT_CLUSTER_ASSIGNMENTS:
+        assignment = CLIENT_CLUSTER_ASSIGNMENTS[client_id]
+        return {
+            "clusterId": assignment.get("clusterId"),
+            "clusterMembers": list(assignment.get("clusterMembers", [client_id])),
+            "assignedTo": assignment.get("assignedTo"),
+        }
+
+    bubbles, isolated, assignments = _load_cluster_state()
+    if client_id in assignments:
+        cluster_id = assignments[client_id]
+        if 0 <= cluster_id < len(bubbles):
+            return {
+                "clusterId": cluster_id,
+                "clusterMembers": list(bubbles[cluster_id]),
+                "assignedTo": "bubble" if len(bubbles[cluster_id]) > 1 else "isolated",
+            }
+        return {
+            "clusterId": None,
+            "clusterMembers": [client_id],
+            "assignedTo": "isolated",
+        }
+
+    if client_id in isolated:
+        return {
+            "clusterId": None,
+            "clusterMembers": [client_id],
+            "assignedTo": "isolated",
+        }
+    raise HTTPException(status_code=404, detail="클라이언트의 클러스터 배정 정보를 찾을 수 없습니다.")
+
+
+def _model_response(
+    path: Path,
+    *,
+    client_id: str,
+    cluster_id: int | None,
+    model_scope: str,
+) -> FileResponse:
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="다운로드할 FL 모델을 찾지 못했습니다.")
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=path.name,
+        headers={
+            "X-Fedstock-Client-Id": client_id,
+            "X-Fedstock-Cluster-Id": "" if cluster_id is None else str(cluster_id),
+            "X-Fedstock-Model-Scope": model_scope,
+            "X-Fedstock-Storage-Path": str(path),
+        },
+    )
+
+
+def _select_single_client_model(client_id: str, assignment: dict[str, Any], uploaded_path: Path) -> tuple[Path, str]:
+    cluster_id = assignment.get("clusterId")
+    if cluster_id is not None:
+        bubble_path = RUN_DIR / "models" / "bubbles" / f"bubble_{int(cluster_id)}.pt"
+        if bubble_path.exists():
+            return bubble_path, "cluster"
+
+    client_path = CLIENT_MODEL_DIR / f"client_{client_id}.pt"
+    if client_path.exists():
+        return client_path, "client"
+    return uploaded_path, "fallback"
+
+
+def _handle_all_clients_fl_model(
+    *,
+    client_id: str,
+    round_id: str,
+    sample_weight: float,
+    uploaded_path: Path,
+    state_dict: dict[str, torch.Tensor],
+    assignment: dict[str, Any],
+) -> FileResponse:
+    cluster_id = assignment.get("clusterId")
+    if cluster_id is None:
+        raise HTTPException(status_code=404, detail="클러스터 모델 업데이트를 위한 클러스터 배정 정보가 없습니다.")
+
+    cluster_members = set(str(member) for member in assignment.get("clusterMembers", []) if str(member))
+    if not cluster_members:
+        raise HTTPException(status_code=404, detail="클러스터 구성원 정보를 찾지 못했습니다.")
+
+    round_state = FL_MODEL_SYNC_QUEUES.setdefault(round_id, {})
+    cluster_state = round_state.setdefault(
+        int(cluster_id),
+        {
+            "expectedMembers": cluster_members,
+            "clients": {},
+        },
+    )
+    if set(cluster_state["expectedMembers"]) != cluster_members:
+        raise HTTPException(status_code=409, detail="동일 round_id의 클러스터 구성원 정보가 일치하지 않습니다.")
+
+    clients: dict[str, dict[str, Any]] = cluster_state["clients"]
+    if client_id in clients:
+        raise HTTPException(status_code=409, detail="동일 round_id에 같은 client_id 모델이 이미 업로드되었습니다.")
+
+    clients[client_id] = {
+        "path": uploaded_path,
+        "state": state_dict,
+        "sampleWeight": sample_weight,
+    }
+
+    if set(clients) != cluster_members:
+        raise HTTPException(status_code=409, detail="클러스터 모델 업데이트가 아직 완료되지 않았습니다.")
+
+    averaged = _weighted_average_state_dicts(
+        [(item["state"], float(item["sampleWeight"])) for item in clients.values()]
+    )
+    cluster_dir = _fl_sync_root(round_id) / "clusters"
+    cluster_dir.mkdir(parents=True, exist_ok=True)
+    output_path = cluster_dir / f"bubble_{int(cluster_id)}.pt"
+    torch.save(averaged, output_path)
+    return _model_response(output_path, client_id=client_id, cluster_id=int(cluster_id), model_scope="cluster")
+
+
 def _load_model(model_path: Path) -> LightweightLSTM:
     state_dict = torch.load(model_path, map_location="cpu")
     input_size = int(state_dict["lstm.weight_ih_l0"].shape[1])
@@ -874,6 +1353,70 @@ def health_check() -> dict[str, Any]:
 @app.get("/health")
 def legacy_health_check() -> dict[str, Any]:
     return health_check()
+
+
+def _cluster_assignment_handler(raw_payload: dict[str, Any]) -> dict[str, Any]:
+    payload = _parse_cluster_assignment_request(raw_payload)
+    importance = _importance_vector_from_payload(payload)
+    if payload.scope == "single_client":
+        return _handle_single_client_assignment(payload, importance)
+    return _handle_all_clients_assignment(payload, importance)
+
+
+@app.post("/clients/cluster-assignment")
+@app.post("/ai/clients/cluster-assignment")
+def cluster_assignment(
+    raw_payload: dict[str, Any] = Body(...),
+    _: None = Depends(_verify_bearer_token),
+) -> dict[str, Any]:
+    return _cluster_assignment_handler(raw_payload)
+
+
+@app.post("/clients/{client_id}/fl-model")
+@app.post("/ai/clients/{client_id}/fl-model")
+def fl_model_sync(
+    client_id: str,
+    model_file: UploadFile = File(...),
+    form_client_id: str = Form(..., alias="client_id"),
+    scope: str = Form(...),
+    round_id: str = Form(...),
+    sample_weight: float | None = Form(default=None),
+    _: None = Depends(_verify_bearer_token),
+) -> FileResponse:
+    if client_id != form_client_id:
+        raise HTTPException(status_code=400, detail="Path의 client_id와 Body의 client_id가 일치하지 않습니다.")
+    if scope not in {"single_client", "all_clients"}:
+        raise HTTPException(status_code=400, detail="지원하지 않는 scope입니다.")
+    if not round_id.strip():
+        raise HTTPException(status_code=400, detail="round_id는 비어 있을 수 없습니다.")
+
+    effective_weight = 1.0 if sample_weight is None else float(sample_weight)
+    if effective_weight <= 0:
+        raise HTTPException(status_code=400, detail="sample_weight는 0보다 커야 합니다.")
+
+    _safe_path_component(client_id, "client_id")
+    _safe_path_component(round_id, "round_id")
+    uploaded_path = _save_uploaded_model(model_file, client_id, round_id)
+    state_dict = _load_state_dict(uploaded_path)
+    assignment = _resolve_client_assignment(client_id)
+
+    if scope == "single_client":
+        selected_path, model_scope = _select_single_client_model(client_id, assignment, uploaded_path)
+        return _model_response(
+            selected_path,
+            client_id=client_id,
+            cluster_id=assignment.get("clusterId"),
+            model_scope=model_scope,
+        )
+
+    return _handle_all_clients_fl_model(
+        client_id=client_id,
+        round_id=round_id,
+        sample_weight=effective_weight,
+        uploaded_path=uploaded_path,
+        state_dict=state_dict,
+        assignment=assignment,
+    )
 
 
 @app.post("/analyze-csv")
