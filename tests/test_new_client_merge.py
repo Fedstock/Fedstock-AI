@@ -23,12 +23,15 @@ import numpy as np
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
+from src.fl.server_clustering import assign_new_client  # noqa: E402
+
 # Stub heavy deps that server.py imports at module load but add_client never uses.
+# Import server_clustering first so SciPy does not see an incomplete torch stub
+# while initializing its optional array API compatibility checks.
 for _name in ("torch", "flwr"):
     if _name not in sys.modules:
         sys.modules[_name] = types.ModuleType(_name)
 
-from src.fl.server_clustering import assign_new_client  # noqa: E402
 from src.fl.server import BubbleServer  # noqa: E402
 
 

@@ -25,7 +25,9 @@ OUTPUTS_DIR = ROOT_DIR / "outputs"
 DEFAULT_RUN_ID = "20260522_025148_061195"
 
 SEQ_LEN = 14
-FORECAST_HORIZON_DAYS = 7
+FORECAST_HORIZON_DAYS = 1
+FORECAST_TARGET_COLUMN = "target_1d"
+FORECAST_UNIT = "next_day_sales"
 HISTORY_WINDOW_PER_ITEM = 35
 DEFAULT_LEAD_TIME_DAYS = 4
 
@@ -220,12 +222,8 @@ def _read_csv(file: UploadFile, content: bytes) -> pd.DataFrame:
         raise HTTPException(status_code=400, detail=f"CSV를 읽을 수 없습니다: {exc}") from exc
 
 
-def _next_horizon_sales_sum(values: pd.Series) -> pd.Series:
-    total: pd.Series | None = None
-    for offset in range(1, FORECAST_HORIZON_DAYS + 1):
-        shifted = values.shift(-offset)
-        total = shifted if total is None else total + shifted
-    return total if total is not None else values * np.nan
+def _next_day_sales(values: pd.Series) -> pd.Series:
+    return values.shift(-1)
 
 
 def _derive_dept_from_item_id(item_id: pd.Series) -> pd.Series:
@@ -242,7 +240,8 @@ def _prepare_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, Any]]
     client_col = _find_column(df, ["client_id", "clientId", "클라이언트 ID", "클라이언트ID", "매장 클라이언트", "매장클라이언트"])
     store_col = _find_column(df, ["store_id", "storeId", "매장 ID", "매장ID", "매장"])
     dept_col = _find_column(df, ["dept_id", "deptId", "department", "상품군", "부서"])
-    target_col = _find_column(df, ["target_7d", "target7d", "7일 판매량", "7일판매량", "주간 판매량", "주간판매량"])
+    target_col = _find_column(df, ["target_1d", "target1d", "1일 판매량", "1일판매량", "다음날 판매량", "익일 판매량"])
+    legacy_target_col = _find_column(df, ["target_7d", "target7d", "7일 판매량", "7일판매량", "주간 판매량", "주간판매량"])
 
     validation = [
         _validation_item("item_id", "상품 정보", item_col is not None),
@@ -309,11 +308,13 @@ def _prepare_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, Any]]
 
     group_cols = ["client_id", "item_id"]
     grouped_sales = prepared.groupby(group_cols, sort=False)["sales"]
-    computed_target_7d = grouped_sales.transform(_next_horizon_sales_sum)
+    computed_target = grouped_sales.transform(_next_day_sales)
     if target_col:
-        prepared["target_7d"] = pd.to_numeric(prepared[target_col], errors="coerce").combine_first(computed_target_7d)
+        prepared[FORECAST_TARGET_COLUMN] = pd.to_numeric(prepared[target_col], errors="coerce").combine_first(computed_target)
     else:
-        prepared["target_7d"] = computed_target_7d
+        prepared[FORECAST_TARGET_COLUMN] = computed_target
+    if legacy_target_col and legacy_target_col != FORECAST_TARGET_COLUMN:
+        prepared = prepared.drop(columns=[legacy_target_col], errors="ignore")
 
     if "lag_7" not in prepared.columns:
         prepared["lag_7"] = grouped_sales.shift(7)
@@ -358,7 +359,7 @@ def _prepare_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, Any]]
     if not target_col:
         issues.append({
             "severity": "warning",
-            "message": "판매 이력을 바탕으로 다음 7일 판매 기준을 계산했습니다.",
+            "message": "판매 이력을 바탕으로 다음 1일 판매 기준을 계산했습니다.",
         })
 
     dropped = len(prepared) - len(usable)
@@ -414,14 +415,14 @@ def _safe_cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _client_importance_from_frame(client_df: pd.DataFrame) -> np.ndarray:
-    frame = client_df.dropna(subset=SELECTED_FEATURES + ["target_7d"])
+    frame = client_df.dropna(subset=SELECTED_FEATURES + [FORECAST_TARGET_COLUMN])
     if frame.empty:
         values = client_df[SELECTED_FEATURES].to_numpy(dtype=np.float32)
         variances = np.nan_to_num(np.nanvar(values, axis=0), nan=0.0)
         norm = np.linalg.norm(variances)
         return (variances / norm).astype(np.float32) if norm > 0 else np.ones(len(SELECTED_FEATURES), dtype=np.float32)
 
-    target = frame["target_7d"].to_numpy(dtype=np.float32)
+    target = frame[FORECAST_TARGET_COLUMN].to_numpy(dtype=np.float32)
     vector: list[float] = []
     for feature in SELECTED_FEATURES:
         feature_values = frame[feature].to_numpy(dtype=np.float32)
@@ -608,14 +609,14 @@ def _predict_sales(
             model, model_path = _get_model_for_representative(assignment["representativeClientId"])
             used_model_paths.add(model_path)
 
-            target_7d = client_df["target_7d"].dropna().to_numpy(dtype=np.float32)
-            if len(target_7d) == 0 or len(client_df) <= SEQ_LEN:
+            target_values = client_df[FORECAST_TARGET_COLUMN].dropna().to_numpy(dtype=np.float32)
+            if len(target_values) == 0 or len(client_df) <= SEQ_LEN:
                 continue
 
             x_scaler = StandardScaler()
             y_scaler = RobustScaler()
             scaled_features = x_scaler.fit_transform(client_df[SELECTED_FEATURES].to_numpy(dtype=np.float32)).astype(np.float32)
-            y_scaler.fit(target_7d.reshape(-1, 1))
+            y_scaler.fit(target_values.reshape(-1, 1))
             client_df["_feature_row"] = list(scaled_features)
 
             for item_id, group in client_df.groupby("item_id", sort=False):
@@ -626,8 +627,8 @@ def _predict_sales(
                 group_features = np.stack(group["_feature_row"].to_numpy())
                 start_idx = max(SEQ_LEN, len(group) - HISTORY_WINDOW_PER_ITEM)
                 for target_idx in range(start_idx, len(group)):
-                    actual_7d = group.loc[target_idx, "target_7d"]
-                    if pd.isna(actual_7d):
+                    actual_target = group.loc[target_idx, FORECAST_TARGET_COLUMN]
+                    if pd.isna(actual_target):
                         continue
                     sequence = group_features[target_idx - SEQ_LEN:target_idx]
                     tensor = torch.tensor(sequence, dtype=torch.float32).unsqueeze(0)
@@ -637,7 +638,7 @@ def _predict_sales(
                         "client_id": str(client_id),
                         "item_id": item_id,
                         "sale_date": group.loc[target_idx, "sale_date"],
-                        "actual": max(0.0, float(actual_7d)),
+                        "actual": max(0.0, float(actual_target)),
                         "predicted": max(0.0, prediction),
                     })
 
@@ -659,8 +660,8 @@ def _predict_sales(
 
 
 def _trend_from_predictions(source: pd.DataFrame, historical_predictions: pd.DataFrame) -> list[dict[str, Any]]:
-    actual_source = source.dropna(subset=["target_7d"])
-    actual_by_date = actual_source.groupby(actual_source["sale_date"].dt.date).agg(sales=("target_7d", "sum")).reset_index()
+    actual_source = source.dropna(subset=[FORECAST_TARGET_COLUMN])
+    actual_by_date = actual_source.groupby(actual_source["sale_date"].dt.date).agg(sales=(FORECAST_TARGET_COLUMN, "sum")).reset_index()
     pred_by_date = historical_predictions.groupby(historical_predictions["sale_date"].dt.date).agg(forecast=("predicted", "sum")).reset_index()
     merged = actual_by_date.merge(pred_by_date, on="sale_date", how="inner").tail(30)
     return [
@@ -755,8 +756,8 @@ def _build_dashboard(
     }
 
     for _, row in latest_predictions.iterrows():
-        forecast_7d_qty = max(0.0, float(row["forecast_qty"]))
-        forecast_daily_qty = forecast_7d_qty / FORECAST_HORIZON_DAYS
+        forecast_qty = max(0.0, float(row["forecast_qty"]))
+        forecast_daily_qty = forecast_qty / FORECAST_HORIZON_DAYS
         rolling_mean_7 = float(row["rolling_mean_7"]) if not pd.isna(row["rolling_mean_7"]) else forecast_daily_qty
         rolling_mean_28 = float(row["rolling_mean_28"]) if not pd.isna(row["rolling_mean_28"]) else rolling_mean_7
         sell_price = max(0.0, float(row["sell_price"]))
@@ -775,7 +776,7 @@ def _build_dashboard(
         }
         forecast_items.append({
             **item,
-            "forecastQty": round(forecast_7d_qty, 1),
+            "forecastQty": round(forecast_qty, 1),
             "forecastDailyQty": round(forecast_daily_qty, 1),
             "forecastHorizonDays": FORECAST_HORIZON_DAYS,
             "rollingMean7": round(rolling_mean_7, 1),
@@ -786,14 +787,14 @@ def _build_dashboard(
         })
         top_products.append({
             **item,
-            "sales": round(forecast_7d_qty),
-            "revenue": round(forecast_7d_qty * sell_price),
+            "sales": round(forecast_qty),
+            "revenue": round(forecast_qty * sell_price),
         })
         forecast_daily_series.append({
             **item,
-            "forecastQty": round(forecast_7d_qty, 1),
+            "forecastQty": round(forecast_qty, 1),
             "forecastHorizonDays": FORECAST_HORIZON_DAYS,
-            "points": _daily_forecast_points(source, client_id, raw_item_id, forecast_7d_qty, forecast_start),
+            "points": _daily_forecast_points(source, client_id, raw_item_id, forecast_qty, forecast_start),
         })
 
     forecast_total = sum(item["forecastQty"] for item in forecast_items)
@@ -837,9 +838,9 @@ def _build_dashboard(
             "modelCount": len(used_model_paths),
             "selectedFeatures": SELECTED_FEATURES,
             "sequenceLength": SEQ_LEN,
-            "forecastTarget": "target_7d",
+            "forecastTarget": FORECAST_TARGET_COLUMN,
             "forecastHorizonDays": FORECAST_HORIZON_DAYS,
-            "forecastUnit": "next_7_days_sum",
+            "forecastUnit": FORECAST_UNIT,
             "stockAvailable": stock_available,
             "runDir": str(RUN_DIR.relative_to(ROOT_DIR)) if RUN_DIR.exists() else str(RUN_DIR),
         },
@@ -865,7 +866,7 @@ def health_check() -> dict[str, Any]:
         "featureImportancesExists": FEATURE_IMPORTANCES_PATH.exists(),
         "clusteringResultsExists": CLUSTERING_RESULTS_PATH.exists(),
         "selectedFeatures": SELECTED_FEATURES,
-        "forecastTarget": "target_7d",
+        "forecastTarget": FORECAST_TARGET_COLUMN,
         "forecastHorizonDays": FORECAST_HORIZON_DAYS,
     }
 

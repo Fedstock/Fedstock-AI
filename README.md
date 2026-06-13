@@ -29,6 +29,13 @@ Flower 프레임워크와 PyTorch를 결합하여 버블 단위의 FedAvg 연합
 * `src/fl/server_clustering.py`를 실행하여 초기 EMD 거리 계산 및 클러스터 할당을 수행할 수 있습니다.
 * `src/fl/server.py` 내의 `BubbleServer` 클래스가 전체 communication round와 parameter aggregation을 오케스트레이션합니다.
 
+## 🔎 `/analyze-csv` 예측 Target
+
+* 서버 예측 API는 시나리오 기준에 맞춰 다음날 판매량을 예측합니다.
+* 입력 CSV에 `target_1d`가 있으면 해당 값을 우선 사용합니다.
+* `target_1d`가 없으면 `client_id`와 `item_id` 단위로 정렬된 `sales.shift(-1)` 값을 계산해 다음날 판매량 target으로 사용합니다.
+* 응답의 `forecastQty`, `forecastHorizonDays`, `forecastTarget`, `forecastUnit`은 각각 다음날 판매량, `1`, `target_1d`, `next_day_sales` 기준입니다.
+
 ---
 
 ## 💾 중앙 데이터베이스 구조 (PostgreSQL)
