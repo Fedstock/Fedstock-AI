@@ -18,11 +18,19 @@ def _get_scaler_center_and_scale(target_scaler):
 
 
 class HuberSMAPELoss(nn.Module):
-    def __init__(self, target_scaler=None, huber_delta=1.0, smape_weight=0.1, eps=1e-8):
+    def __init__(
+        self,
+        target_scaler=None,
+        huber_delta=1.0,
+        smape_weight=0.1,
+        eps=1e-8,
+        target_transform="identity",
+    ):
         super().__init__()
         self.huber_delta = huber_delta
         self.smape_weight = smape_weight
         self.eps = eps
+        self.target_transform = target_transform
 
         center, scale = _get_scaler_center_and_scale(target_scaler)
         if center is None:
@@ -43,6 +51,10 @@ class HuberSMAPELoss(nn.Module):
         else:
             pred_for_smape = pred
             target_for_smape = target
+
+        if self.target_transform == "log1p":
+            pred_for_smape = torch.clamp(torch.expm1(pred_for_smape), min=0.0)
+            target_for_smape = torch.clamp(torch.expm1(target_for_smape), min=0.0)
 
         smape = torch.mean(
             2.0

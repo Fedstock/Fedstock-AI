@@ -48,6 +48,35 @@ out/
 outputs/runs/*
 !outputs/runs/20260522_025148_061195/
 
+# ML data files (large datasets)
+data/clients/
+data/CA_*/
+*.csv
+*.parquet
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.npy
+*.npz
+
+# Model weights & checkpoints
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Client uploaded data storage
+Fedstock-Backend/storage/
+
+# PyInstaller build artifacts
+Fedstock-AI-Client/dist/
+Fedstock-AI-Client/build/
+
 # OS generated files
 .DS_Store
 .DS_Store?

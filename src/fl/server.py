@@ -2,6 +2,7 @@ import numpy as np
 import flwr as fl
 import torch
 import os
+import json
 from concurrent.futures import ThreadPoolExecutor
 from src.fl.server_clustering import perform_clustering, assign_new_client
 
@@ -213,15 +214,11 @@ class BubbleServer:
         client_ids = list(self.clients.keys())
         
         for cid in client_ids:
+            print(f"Extracting noisy feature importance for {cid}...")
             client = self.clients[cid]
             noisy_imp = client.extract_noisy_importance()
             noisy_importances.append(noisy_imp)
             
-        # Save noisy feature importances to outputs folder
-        import json
-        import os
-        import numpy as np
-        
         importance_dict = {cid: imp.tolist() for cid, imp in zip(client_ids, noisy_importances)}
         self.noisy_importances = {cid: np.array(imp, dtype=np.float32) for cid, imp in zip(client_ids, noisy_importances)}
         os.makedirs(self.output_dir, exist_ok=True)
@@ -230,7 +227,67 @@ class BubbleServer:
             json.dump(importance_dict, f, indent=4)
         print(f"Feature importances saved to {importance_path}")
 
-        noisy_importances = np.array(noisy_importances)
+        self.cluster_from_noisy_importances(
+            noisy_importances=noisy_importances,
+            client_ids=client_ids,
+            stage="initial_clustering",
+            round_num=0,
+        )
+
+    def cluster_from_noisy_importances(
+        self,
+        noisy_importances,
+        client_ids=None,
+        stage="initial_clustering",
+        round_num=0,
+    ):
+        """
+        Cluster clients from precomputed noisy feature importances.
+
+        noisy_importances may be a dict keyed by client id or a sequence aligned
+        with client_ids. This supports offline feature extraction on another
+        machine, followed by clustering/training in the current environment.
+        """
+        if client_ids is None:
+            client_ids = list(self.clients.keys())
+
+        if isinstance(noisy_importances, dict):
+            missing = [cid for cid in client_ids if cid not in noisy_importances]
+            extra = [cid for cid in noisy_importances.keys() if cid not in self.clients]
+            if missing:
+                raise ValueError(f"Missing precomputed feature importances for clients: {missing}")
+            if extra:
+                print(f"Ignoring precomputed feature importances for unknown clients: {sorted(extra)}")
+            ordered_vectors = [
+                np.asarray(noisy_importances[cid], dtype=np.float32)
+                for cid in client_ids
+            ]
+            self.noisy_importances = {
+                cid: np.asarray(noisy_importances[cid], dtype=np.float32)
+                for cid in client_ids
+            }
+        else:
+            ordered_vectors = [np.asarray(vector, dtype=np.float32) for vector in noisy_importances]
+            if len(ordered_vectors) != len(client_ids):
+                raise ValueError(
+                    "Length mismatch between precomputed feature importances and client_ids."
+                )
+            self.noisy_importances = {
+                cid: np.asarray(vector, dtype=np.float32)
+                for cid, vector in zip(client_ids, ordered_vectors)
+            }
+
+        os.makedirs(self.output_dir, exist_ok=True)
+        importance_path = os.path.join(self.output_dir, "feature_importances.json")
+        with open(importance_path, "w") as f:
+            json.dump(
+                {cid: vector.tolist() for cid, vector in self.noisy_importances.items()},
+                f,
+                indent=4,
+            )
+        print(f"Feature importances saved to {importance_path}")
+
+        noisy_importances = np.array(ordered_vectors)
         labels, k_star, _, _ = perform_clustering(
             noisy_importances,
             max_clusters=8,
@@ -266,8 +323,8 @@ class BubbleServer:
         # Save clustering results to outputs folder
         self.save_clustering_results(
             os.path.join(self.output_dir, "clustering_results.json"),
-            stage="initial_clustering",
-            round_num=0,
+            stage=stage,
+            round_num=round_num,
             k_star=k_star,
             reset_history=True,
         )
