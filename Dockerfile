@@ -6,11 +6,13 @@ WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV MODEL_LOCAL_DIR=/tmp/models
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         curl \
+    && mkdir -p /tmp/models \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./

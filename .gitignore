@@ -43,10 +43,13 @@ backend/src/main/resources/application-*.local.yml
 *.ipr
 out/
 
-# Models and outputs
-# Ignore all runs except the baseline referenced in configurations
-outputs/runs/*
-!outputs/runs/20260522_025148_061195/
+# Models and runtime outputs
+*.pt
+*.pth
+*.pkl
+*.pickle
+*.joblib
+outputs/
 
 # OS generated files
 .DS_Store
@@ -56,3 +59,7 @@ outputs/runs/*
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# md
+*.md
+!README.md

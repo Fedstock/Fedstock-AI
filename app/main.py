@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -11,11 +12,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sklearn.preprocessing import RobustScaler, StandardScaler
 
 from app.config import get_settings
+from app.storage import StorageError, build_s3_uri, download_s3_file, parse_s3_uri, upload_s3_file
 from src.fl.server_clustering import assign_new_client
 from src.models.lstm import LightweightLSTM
 
@@ -51,11 +53,11 @@ def _resolve_run_dir() -> Path:
 
 
 RUN_DIR = _resolve_run_dir()
-CLIENT_MODEL_DIR = RUN_DIR / "models" / "clients"
 CONFIG_PATH = RUN_DIR / "config.json"
 FEATURE_IMPORTANCES_PATH = RUN_DIR / "feature_importances.json"
 CLUSTERING_RESULTS_PATH = RUN_DIR / "clustering_results.json"
 ITEM_MASTER_PATH = ROOT_DIR / "data" / "item_master.csv"
+MODEL_LOCAL_DIR = Path(get_settings().model_local_dir)
 
 
 def _load_json(path: Path, default: Any) -> Any:
@@ -166,6 +168,79 @@ def _validation_item(
         "status": status,
         "message": message,
     }
+
+
+def _safe_path_component(value: str, field_name: str) -> str:
+    cleaned = str(value).strip()
+    if not cleaned or not re.fullmatch(r"[A-Za-z0-9_.-]+", cleaned):
+        raise HTTPException(status_code=400, detail=f"{field_name} may contain only letters, numbers, '_', '-', and '.'.")
+    return cleaned
+
+
+def _ensure_model_local_dir() -> Path:
+    MODEL_LOCAL_DIR.mkdir(parents=True, exist_ok=True)
+    return MODEL_LOCAL_DIR
+
+
+def _load_tensor_state_dict(path: Path) -> dict[str, torch.Tensor]:
+    try:
+        state = torch.load(path, map_location="cpu")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Failed to read PyTorch model artifact: {exc}") from exc
+    if not isinstance(state, dict) or not state:
+        raise HTTPException(status_code=422, detail="Model artifact must be a non-empty state_dict.")
+    tensor_state: dict[str, torch.Tensor] = {}
+    for key, value in state.items():
+        if not torch.is_tensor(value):
+            raise HTTPException(status_code=422, detail=f"State dict value must be a tensor: {key}")
+        tensor_state[str(key)] = value.detach().cpu().float()
+    return tensor_state
+
+
+def _weighted_average_state_dicts(
+    weighted_states: list[tuple[dict[str, torch.Tensor], float]]
+) -> dict[str, torch.Tensor]:
+    if not weighted_states:
+        raise HTTPException(status_code=422, detail="No model artifacts were provided for aggregation.")
+    reference_keys = set(weighted_states[0][0])
+    for state, _ in weighted_states:
+        if set(state) != reference_keys:
+            raise HTTPException(status_code=422, detail="Model state_dict keys do not match.")
+    total_weight = sum(max(0.0, float(weight)) for _, weight in weighted_states)
+    if total_weight <= 0:
+        raise HTTPException(status_code=422, detail="Total sample count must be greater than zero.")
+
+    averaged: dict[str, torch.Tensor] = {}
+    for key in sorted(reference_keys):
+        reference_shape = weighted_states[0][0][key].shape
+        weighted_sum = None
+        for state, weight in weighted_states:
+            tensor = state[key]
+            if tensor.shape != reference_shape:
+                raise HTTPException(status_code=422, detail=f"Tensor shape mismatch for state_dict key: {key}")
+            contribution = tensor * (float(weight) / total_weight)
+            weighted_sum = contribution if weighted_sum is None else weighted_sum + contribution
+        averaged[key] = weighted_sum
+    return averaged
+
+
+def _json_field(payload: dict[str, Any], *names: str, required: bool = True, default: Any = None) -> Any:
+    for name in names:
+        if name in payload and payload[name] is not None:
+            return payload[name]
+    if required:
+        raise HTTPException(status_code=400, detail=f"Missing required field: {names[0]}")
+    return default
+
+
+def _join_s3_prefix(prefix_uri: str, filename: str) -> str:
+    bucket, key = parse_s3_uri(prefix_uri.rstrip("/") + "/placeholder")
+    prefix_key = key.rsplit("/", 1)[0].strip("/")
+    return build_s3_uri(bucket, f"{prefix_key}/{filename}" if prefix_key else filename)
+
+
+def _storage_http_error(exc: StorageError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.message)
 
 
 def _csv_status(
@@ -509,7 +584,7 @@ def _cluster_assignment_for_client(
             members = [client_id]
         signal_members = [cid for cid in members if cid in existing_importances]
         similar = _nearest_clients(importance, [cid for cid in members if cid != client_id] or list(existing_importances), existing_importances)
-        representative = client_id if (CLIENT_MODEL_DIR / f"client_{client_id}.pt").exists() else (similar[0]["clientId"] if similar else client_id)
+        representative = similar[0]["clientId"] if similar else client_id
         return {
             "clientId": client_id,
             "isKnownClient": True,
@@ -580,9 +655,9 @@ _MODEL_CACHE: dict[str, LightweightLSTM] = {}
 
 
 def _get_model_for_representative(representative_client_id: str) -> tuple[LightweightLSTM, Path]:
-    candidate = CLIENT_MODEL_DIR / f"client_{representative_client_id}.pt"
+    raise HTTPException(status_code=503, detail="Local repository model artifacts are not used in production.")
     if not candidate.exists():
-        candidates = sorted(CLIENT_MODEL_DIR.glob("client_*.pt"))
+        candidates = []
         if not candidates:
             raise HTTPException(status_code=500, detail="예상 판매량 계산에 필요한 기준 정보를 찾지 못했습니다.")
         candidate = candidates[0]
@@ -593,20 +668,52 @@ def _get_model_for_representative(representative_client_id: str) -> tuple[Lightw
     return _MODEL_CACHE[key], candidate
 
 
+def _model_artifact_uri_for_assignment(assignment: dict[str, Any]) -> str:
+    settings = get_settings()
+    if not settings.artifact_bucket:
+        raise HTTPException(status_code=503, detail="ARTIFACT_BUCKET is required for operational model artifact loading.")
+
+    run_id = RUN_DIR.name
+    cluster_id = assignment.get("clusterId")
+    if cluster_id is not None:
+        return build_s3_uri(settings.artifact_bucket, f"models/clusters/{run_id}/cluster-{cluster_id}.pt")
+
+    representative = str(assignment["representativeClientId"])
+    return build_s3_uri(settings.artifact_bucket, f"updates/{run_id}/clients/{representative}.pt")
+
+
+def _get_model_for_assignment(assignment: dict[str, Any]) -> tuple[LightweightLSTM, str]:
+    artifact_uri = _model_artifact_uri_for_assignment(assignment)
+    safe_name = _safe_path_component(
+        f"cluster-{assignment['clusterId']}" if assignment.get("clusterId") is not None else str(assignment["representativeClientId"]),
+        "model artifact",
+    )
+    local_path = _ensure_model_local_dir() / "analyze-csv" / RUN_DIR.name / f"{safe_name}.pt"
+    try:
+        download_s3_file(artifact_uri, local_path)
+    except StorageError as exc:
+        raise _storage_http_error(exc) from exc
+
+    key = artifact_uri
+    if key not in _MODEL_CACHE:
+        _MODEL_CACHE[key] = _load_model(local_path)
+    return _MODEL_CACHE[key], artifact_uri
+
+
 def _predict_sales(
     df: pd.DataFrame,
     assignments: dict[str, dict[str, Any]],
-) -> tuple[pd.DataFrame, pd.DataFrame, list[Path]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     historical_rows: list[dict[str, Any]] = []
     latest_rows: list[dict[str, Any]] = []
-    used_model_paths: set[Path] = set()
+    used_model_artifacts: set[str] = set()
 
     with torch.no_grad():
         for client_id, client_df in df.groupby("client_id", sort=False):
             client_df = client_df.copy()
             assignment = assignments[str(client_id)]
-            model, model_path = _get_model_for_representative(assignment["representativeClientId"])
-            used_model_paths.add(model_path)
+            model, model_artifact_uri = _get_model_for_assignment(assignment)
+            used_model_artifacts.add(model_artifact_uri)
 
             target_7d = client_df["target_7d"].dropna().to_numpy(dtype=np.float32)
             if len(target_7d) == 0 or len(client_df) <= SEQ_LEN:
@@ -647,7 +754,7 @@ def _predict_sales(
                 prediction = float(y_scaler.inverse_transform(scaled_prediction.reshape(-1, 1))[0, 0])
                 latest = group.iloc[-1].to_dict()
                 latest["forecast_qty"] = max(0.0, prediction)
-                latest["model_path"] = str(model_path)
+                latest["model_artifact_uri"] = model_artifact_uri
                 latest["assigned_cluster"] = assignment["clusterId"]
                 latest["representative_client_id"] = assignment["representativeClientId"]
                 latest_rows.append(latest)
@@ -655,7 +762,7 @@ def _predict_sales(
     if not latest_rows:
         raise HTTPException(status_code=400, detail="예상 판매량을 계산할 수 있는 상품 이력이 없습니다.")
 
-    return pd.DataFrame(historical_rows), pd.DataFrame(latest_rows), sorted(used_model_paths)
+    return pd.DataFrame(historical_rows), pd.DataFrame(latest_rows), sorted(used_model_artifacts)
 
 
 def _trend_from_predictions(source: pd.DataFrame, historical_predictions: pd.DataFrame) -> list[dict[str, Any]]:
@@ -734,7 +841,7 @@ def _build_dashboard(
     historical_predictions: pd.DataFrame,
     validation: list[dict[str, Any]],
     issues: list[dict[str, str]],
-    used_model_paths: list[Path],
+    used_model_artifacts: list[str],
     stock_available: bool,
     cluster_assignments: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -833,16 +940,164 @@ def _build_dashboard(
         "status": status,
         "data": data,
         "model": {
-            "paths": [str(path.relative_to(ROOT_DIR)) for path in used_model_paths[:10]],
-            "modelCount": len(used_model_paths),
+            "artifactStorage": "s3" if get_settings().artifact_bucket else "not_configured",
+            "modelCount": len(used_model_artifacts),
+            "artifactUris": used_model_artifacts[:10],
             "selectedFeatures": SELECTED_FEATURES,
             "sequenceLength": SEQ_LEN,
             "forecastTarget": "target_7d",
             "forecastHorizonDays": FORECAST_HORIZON_DAYS,
             "forecastUnit": "next_7_days_sum",
             "stockAvailable": stock_available,
-            "runDir": str(RUN_DIR.relative_to(ROOT_DIR)) if RUN_DIR.exists() else str(RUN_DIR),
+            "runId": RUN_DIR.name,
         },
+    }
+
+
+@app.post("/clients/fl-model/aggregate")
+def aggregate_fl_models(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    scope = str(_json_field(payload, "scope")).strip()
+    if scope != "all_clients":
+        raise HTTPException(status_code=400, detail="scope must be all_clients.")
+
+    round_id = str(_json_field(payload, "roundId", "round_id")).strip()
+    safe_round_id = _safe_path_component(round_id, "roundId")
+    output_prefix_uri = str(_json_field(payload, "outputPrefixUri", "output_prefix_uri")).strip()
+    models = _json_field(payload, "models")
+    if not isinstance(models, list) or not models:
+        raise HTTPException(status_code=400, detail="models must be a non-empty array.")
+
+    expected_count = _json_field(
+        payload,
+        "expectedClientCount",
+        "expected_client_count",
+        required=False,
+        default=len(models),
+    )
+    if int(expected_count) != len(models):
+        raise HTTPException(status_code=409, detail="expectedClientCount does not match models length.")
+
+    cluster_id = _json_field(payload, "clusterId", "cluster_id", required=False)
+    model_version = _json_field(payload, "modelVersion", "model_version", required=False)
+    cluster_id_text = None if cluster_id is None else str(cluster_id).strip()
+    if cluster_id_text:
+        _safe_path_component(cluster_id_text, "clusterId")
+
+    local_root = _ensure_model_local_dir() / safe_round_id
+    download_dir = local_root / "downloads"
+    weighted_states: list[tuple[dict[str, torch.Tensor], float]] = []
+
+    try:
+        parse_s3_uri(output_prefix_uri.rstrip("/") + "/placeholder")
+        for item in models:
+            if not isinstance(item, dict):
+                raise HTTPException(status_code=400, detail="models entries must be objects.")
+            client_id = str(_json_field(item, "clientId", "client_id")).strip()
+            safe_client_id = _safe_path_component(client_id, "clientId")
+            sample_count = float(_json_field(item, "sampleCount", "sample_count", "sampleWeight", "sample_weight"))
+            artifact_uri = str(_json_field(item, "modelArtifactUri", "model_artifact_uri")).strip()
+            local_path = download_dir / f"client_{safe_client_id}.pt"
+            download_s3_file(artifact_uri, local_path)
+            weighted_states.append((_load_tensor_state_dict(local_path), sample_count))
+    except StorageError as exc:
+        raise _storage_http_error(exc) from exc
+
+    averaged = _weighted_average_state_dicts(weighted_states)
+    output_filename = f"cluster-{cluster_id_text}.pt" if cluster_id_text else "global.pt"
+    output_path = local_root / "aggregated" / output_filename
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(averaged, output_path)
+
+    try:
+        aggregated_uri = upload_s3_file(output_path, _join_s3_prefix(output_prefix_uri, output_filename))
+    except StorageError as exc:
+        raise _storage_http_error(exc) from exc
+
+    response: dict[str, Any] = {
+        "ok": True,
+        "roundId": round_id,
+        "receivedClientCount": len(models),
+        "aggregatedModelUri": aggregated_uri,
+        "aggregation": "sample_count_weighted_fedavg",
+    }
+    if cluster_id_text is not None:
+        response["clusterId"] = cluster_id_text
+    if model_version is not None:
+        response["modelVersion"] = str(model_version)
+    return response
+
+
+def _parse_batch_metadata(metadata: str | bytes | None) -> dict[str, Any]:
+    if metadata is None:
+        raise HTTPException(status_code=400, detail="metadata is required.")
+    raw = metadata.decode("utf-8") if isinstance(metadata, bytes) else str(metadata)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"metadata must be valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="metadata must be a JSON object.")
+    return parsed
+
+
+@app.post("/clients/fl-model/batch")
+async def receive_fl_model_batch(
+    metadata: str | None = Form(default=None),
+    model_files: list[UploadFile] | None = File(default=None),
+) -> dict[str, Any]:
+    parsed = _parse_batch_metadata(metadata)
+    scope = str(_json_field(parsed, "scope")).strip()
+    if scope != "all_clients":
+        raise HTTPException(status_code=400, detail="scope must be all_clients.")
+    round_id = str(_json_field(parsed, "round_id", "roundId")).strip()
+    safe_round_id = _safe_path_component(round_id, "round_id")
+    expected_client_count = int(_json_field(parsed, "expected_client_count", "expectedClientCount"))
+    model_items = _json_field(parsed, "models")
+    if not isinstance(model_items, list) or not model_items:
+        raise HTTPException(status_code=400, detail="models must be a non-empty array.")
+    if not model_files:
+        raise HTTPException(status_code=400, detail="model_files is required.")
+    if expected_client_count != len(model_files):
+        raise HTTPException(status_code=409, detail="expected_client_count does not match uploaded model_files count.")
+    if len(model_items) != len(model_files):
+        raise HTTPException(status_code=400, detail="models metadata count does not match uploaded model_files count.")
+
+    expected_by_filename: dict[str, dict[str, Any]] = {}
+    for item in model_items:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="models entries must be objects.")
+        client_id = str(_json_field(item, "client_id", "clientId")).strip()
+        filename = str(_json_field(item, "filename")).strip()
+        _safe_path_component(client_id, "client_id")
+        safe_filename = _safe_path_component(filename, "filename")
+        if not safe_filename.lower().endswith(".pt"):
+            raise HTTPException(status_code=400, detail="model files must use .pt extension.")
+        sample_weight = float(_json_field(item, "sample_weight", "sampleWeight", required=False, default=0))
+        if sample_weight < 0:
+            raise HTTPException(status_code=400, detail="sample_weight must be greater than or equal to zero.")
+        expected_by_filename[safe_filename] = item
+
+    upload_dir = _ensure_model_local_dir() / safe_round_id / "clients"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    received = 0
+    for model_file in model_files:
+        safe_filename = _safe_path_component(model_file.filename or "", "filename")
+        if safe_filename not in expected_by_filename:
+            raise HTTPException(status_code=400, detail=f"Unexpected uploaded model file: {safe_filename}")
+        if not safe_filename.lower().endswith(".pt"):
+            raise HTTPException(status_code=400, detail="model_files must use .pt extension.")
+        target_path = upload_dir / safe_filename
+        content = await model_file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail=f"Uploaded model file is empty: {safe_filename}")
+        target_path.write_bytes(content)
+        _load_tensor_state_dict(target_path)
+        received += 1
+
+    return {
+        "ok": True,
+        "round_id": round_id,
+        "received_client_count": received,
     }
 
 
@@ -858,10 +1113,9 @@ def health_check() -> dict[str, Any]:
         "env": settings.env,
         "aws_region": settings.aws_region,
         "artifact_bucket_configured": bool(settings.artifact_bucket),
-        "model_local_dir": str(model_dir),
-        "run_dir": str(RUN_DIR),
+        "model_local_dir_configured": True,
         "analyzeCsvAvailable": True,
-        "modelDirExists": CLIENT_MODEL_DIR.exists(),
+        "modelLocalDirReady": model_dir.exists(),
         "featureImportancesExists": FEATURE_IMPORTANCES_PATH.exists(),
         "clusteringResultsExists": CLUSTERING_RESULTS_PATH.exists(),
         "selectedFeatures": SELECTED_FEATURES,
@@ -925,7 +1179,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> dict[str, Any]:
             "message": f"{new_count}개 신규 매장 구분을 비슷한 판매 패턴의 매장 유형에 연결했습니다.",
         })
 
-    historical_predictions, latest_predictions, used_model_paths = _predict_sales(prepared, assignments_by_client)
+    historical_predictions, latest_predictions, used_model_artifacts = _predict_sales(prepared, assignments_by_client)
     return _build_dashboard(
         file_name=file.filename or "uploaded.csv",
         source=prepared,
@@ -933,7 +1187,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> dict[str, Any]:
         historical_predictions=historical_predictions,
         validation=validation,
         issues=issues,
-        used_model_paths=used_model_paths,
+        used_model_artifacts=used_model_artifacts,
         stock_available=stock_available,
         cluster_assignments=serializable_assignments,
     )
