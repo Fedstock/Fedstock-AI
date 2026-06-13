@@ -100,6 +100,32 @@ Flower 프레임워크와 PyTorch를 결합하여 버블 단위의 FedAvg 연합
 * `src/fl/server_clustering.py`를 실행하여 초기 EMD 거리 계산 및 클러스터 할당을 수행할 수 있습니다.
 * `src/fl/server.py` 내의 `BubbleServer` 클래스가 전체 communication round와 parameter aggregation을 오케스트레이션합니다.
 
+## 🔎 `/analyze-csv` 예측 Target
+
+* 서버 예측 API는 시나리오 기준에 맞춰 다음날 판매량을 예측합니다.
+* 입력 CSV에 `target_1d`가 있으면 해당 값을 우선 사용합니다.
+* `target_1d`가 없으면 `client_id`와 `item_id` 단위로 정렬된 `sales.shift(-1)` 값을 계산해 다음날 판매량 target으로 사용합니다.
+* 응답의 `forecastQty`, `forecastHorizonDays`, `forecastTarget`, `forecastUnit`은 각각 다음날 판매량, `1`, `target_1d`, `next_day_sales` 기준입니다.
+
+## 🔐 클러스터 배정 API
+
+* `POST /ai/clients/cluster-assignment`는 `NEW_API_SPEC_KO.md`의 초기 클러스터링 배정 API 구현입니다.
+* 호환을 위해 `POST /clients/cluster-assignment`도 같은 handler로 제공합니다.
+* 인증은 `Authorization: Bearer <token>` 헤더를 사용하며, 서버 기대 토큰은 `API_BEARER_TOKEN` 환경변수로 설정해야 합니다.
+* `scope=single_client`는 제출된 `featureImportance`를 기존 `feature_importances.json`, `clustering_results.json` 기준으로 즉시 배정합니다.
+* `scope=all_clients`는 `roundId`와 `expectedClientCount` 기준으로 요청을 큐에 모았다가 전체 클라이언트가 도착하면 초기 클러스터링을 수행합니다.
+* `featureNames`는 서버의 `selectedFeatures`와 같은 집합이어야 하며, 순서가 달라도 서버 기준 순서로 재정렬합니다.
+
+## 🔄 FL 모델 동기화 API
+
+* `POST /ai/clients/{client_id}/fl-model`은 `NEW_API_SPEC_KO.md`의 할당 클러스터 FL 모델 다운로드 API 구현입니다.
+* 호환을 위해 `POST /clients/{client_id}/fl-model`도 같은 handler로 제공합니다.
+* 인증은 클러스터 배정 API와 동일하게 `Authorization: Bearer <token>` 및 `API_BEARER_TOKEN`을 사용합니다.
+* 요청은 `multipart/form-data`이며 `model_file`, `client_id`, `scope`, `round_id`, `sample_weight`를 받습니다.
+* `scope=single_client`는 업로드된 `.pt`를 검증/저장한 뒤, 배정 클러스터의 `bubble_<clusterId>.pt`를 우선 반환하고 없으면 client 모델 또는 업로드 모델로 fallback합니다.
+* `scope=all_clients`는 `round_id`와 `clusterId` 기준으로 클러스터 구성원 모델을 모아 `sample_weight` 가중 평균 모델을 생성한 뒤 반환합니다.
+* 응답은 `application/octet-stream`이며 `X-Fedstock-Client-Id`, `X-Fedstock-Cluster-Id`, `X-Fedstock-Model-Scope`, `X-Fedstock-Storage-Path` 헤더를 포함합니다.
+
 ---
 
 ## 💾 중앙 데이터베이스 구조 (PostgreSQL)
