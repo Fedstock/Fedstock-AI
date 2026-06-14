@@ -20,6 +20,13 @@ _PASSED = 0
 _FAILED = 0
 
 
+def _remove_test_root():
+    if TEST_ROOT.is_symlink() or TEST_ROOT.is_file():
+        TEST_ROOT.unlink()
+    elif TEST_ROOT.exists():
+        shutil.rmtree(TEST_ROOT)
+
+
 def check(name, condition, detail=""):
     global _PASSED, _FAILED
     if condition:
@@ -42,7 +49,7 @@ def _model_bytes(value):
 
 
 def _load_response_model(response):
-    return torch.load(io.BytesIO(response.content), map_location="cpu")
+    return torch.load(io.BytesIO(response.content), map_location="cpu", weights_only=True)
 
 
 def _post_model(client, path, *, client_id="A", scope="single_client", round_id="round-1", sample_weight=1.0, value=1.0, filename=None, headers=None):
@@ -81,8 +88,7 @@ def _token_env(value=TOKEN):
 @contextmanager
 def _patched_run_dir(cluster_members=None):
     cluster_members = cluster_members or ["A", "B"]
-    if TEST_ROOT.exists():
-        shutil.rmtree(TEST_ROOT)
+    _remove_test_root()
     (TEST_ROOT / "models" / "bubbles").mkdir(parents=True, exist_ok=True)
     (TEST_ROOT / "models" / "clients").mkdir(parents=True, exist_ok=True)
     bubble_path = TEST_ROOT / "models" / "bubbles" / "bubble_0.pt"
@@ -111,8 +117,7 @@ def _patched_run_dir(cluster_members=None):
             main.CLIENT_CLUSTER_ASSIGNMENTS.update(old_assignments)
         if hasattr(main, "FL_MODEL_SYNC_QUEUES"):
             main.FL_MODEL_SYNC_QUEUES.clear()
-        if TEST_ROOT.exists():
-            shutil.rmtree(TEST_ROOT)
+        _remove_test_root()
 
 
 def test_fl_model_requires_bearer_token():

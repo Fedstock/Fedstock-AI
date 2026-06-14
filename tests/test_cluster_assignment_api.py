@@ -104,11 +104,11 @@ def test_requires_bearer_token():
         check("wrong bearer token returns 401", response.status_code == 401, response.text)
 
 
-def test_missing_server_token_is_configuration_error():
+def test_missing_server_token_disables_authentication():
     client = TestClient(main.app)
     with _token_env(None):
-        response = client.post("/ai/clients/cluster-assignment", headers=_headers(), json=_payload())
-        check("missing API_BEARER_TOKEN returns 500", response.status_code == 500, response.text)
+        response = client.post("/ai/clients/cluster-assignment", json=_payload())
+        check("missing API_BEARER_TOKEN allows request", response.status_code == 200, response.text)
 
 
 def test_rejects_feature_length_mismatch():
@@ -169,7 +169,7 @@ def test_compatibility_endpoint_alias():
 
 def main_test():
     test_requires_bearer_token()
-    test_missing_server_token_is_configuration_error()
+    test_missing_server_token_disables_authentication()
     test_rejects_feature_length_mismatch()
     test_single_client_assignment()
     test_all_clients_queue_and_complete()

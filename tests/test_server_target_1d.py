@@ -72,7 +72,7 @@ def test_dashboard_and_health_report_next_day_forecast_metadata():
         historical_predictions=historical_predictions,
         validation=validation,
         issues=issues,
-        used_model_paths=[],
+        used_model_artifacts=[],
         stock_available=stock_available,
         cluster_assignments=[],
     )

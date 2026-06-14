@@ -17,7 +17,9 @@ RUN apt-get update \
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.5.1+cpu \
+    && grep -v '^torch==' requirements.txt > /tmp/requirements-no-torch.txt \
+    && pip install --no-cache-dir -r /tmp/requirements-no-torch.txt
 
 COPY . .
 

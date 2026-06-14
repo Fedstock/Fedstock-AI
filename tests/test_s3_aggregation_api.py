@@ -41,6 +41,8 @@ def patched_runtime():
     TEST_ROOT.mkdir(parents=True, exist_ok=True)
     source_dir = TEST_ROOT / "source"
     source_dir.mkdir()
+    uploaded_dir = TEST_ROOT / "uploaded"
+    uploaded_dir.mkdir()
     torch.save(_state(1.0), source_dir / "client-a.pt")
     torch.save(_state(3.0), source_dir / "client-b.pt")
     uri_to_path = {
@@ -56,7 +58,9 @@ def patched_runtime():
         return local_path
 
     def fake_upload(local_path: Path, uri: str) -> str:
-        uploaded[uri] = local_path
+        copied = uploaded_dir / Path(uri).name
+        shutil.copyfile(local_path, copied)
+        uploaded[uri] = copied
         return uri
 
     os.environ["MODEL_LOCAL_DIR"] = str(TEST_ROOT / "models")
@@ -112,8 +116,9 @@ def test_s3_aggregation_returns_s3_uri_and_weighted_model() -> None:
         assert body["modelVersion"] == "v1"
         assert body["receivedClientCount"] == 2
         assert "path" not in body
-        saved = torch.load(uploaded[body["aggregatedModelUri"]], map_location="cpu")
+        saved = torch.load(uploaded[body["aggregatedModelUri"]], map_location="cpu", weights_only=True)
         assert float(saved["weight"][0]) == 2.5
+        assert not (main.MODEL_LOCAL_DIR / "round-1").exists()
 
 
 def test_s3_aggregation_rejects_count_mismatch() -> None:
@@ -138,10 +143,40 @@ def test_s3_aggregation_rejects_count_mismatch() -> None:
         assert response.status_code == 409
 
 
+def test_s3_aggregation_rejects_artifact_bucket_mismatch() -> None:
+    with patched_runtime():
+        old_bucket = os.environ.get("ARTIFACT_BUCKET")
+        os.environ["ARTIFACT_BUCKET"] = "bucket"
+        try:
+            client = TestClient(main.app)
+            response = client.post(
+                "/clients/fl-model/aggregate",
+                json={
+                    "scope": "all_clients",
+                    "roundId": "round-1",
+                    "outputPrefixUri": "s3://other-bucket/models/global/round-1",
+                    "models": [
+                        {
+                            "clientId": "A",
+                            "sampleCount": 1,
+                            "modelArtifactUri": "s3://bucket/updates/round-1/clients/A.pt",
+                        }
+                    ],
+                },
+            )
+            assert response.status_code == 400
+        finally:
+            if old_bucket is None:
+                os.environ.pop("ARTIFACT_BUCKET", None)
+            else:
+                os.environ["ARTIFACT_BUCKET"] = old_bucket
+
+
 def run() -> int:
     tests = [
         ("s3 aggregation returns s3 uri and weighted model", test_s3_aggregation_returns_s3_uri_and_weighted_model),
         ("s3 aggregation rejects count mismatch", test_s3_aggregation_rejects_count_mismatch),
+        ("s3 aggregation rejects artifact bucket mismatch", test_s3_aggregation_rejects_artifact_bucket_mismatch),
     ]
     failures = 0
     for name, test in tests:

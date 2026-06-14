@@ -23,6 +23,17 @@ def parse_s3_uri(s3_uri: str) -> tuple[str, str]:
     return parsed.netloc, key
 
 
+def validate_artifact_bucket_uri(s3_uri: str, field_name: str = "S3 URI") -> tuple[str, str]:
+    bucket, key = parse_s3_uri(s3_uri)
+    expected_bucket = get_settings().artifact_bucket
+    if expected_bucket and bucket != expected_bucket:
+        raise StorageError(
+            f"{field_name} must use configured ARTIFACT_BUCKET: {expected_bucket}",
+            status_code=400,
+        )
+    return bucket, key
+
+
 def build_s3_uri(bucket: str, key: str) -> str:
     clean_bucket = str(bucket or get_settings().artifact_bucket or "").strip()
     clean_key = str(key or "").strip().lstrip("/")
@@ -52,6 +63,7 @@ def download_s3_file(s3_uri: str, local_path: Path, *, s3_client=None) -> Path:
     try:
         client.download_file(bucket, key, str(local_path))
     except Exception as exc:
+        local_path.unlink(missing_ok=True)
         raise StorageError(f"Failed to download S3 artifact: {s3_uri}", status_code=503) from exc
     if not local_path.exists():
         raise StorageError(f"S3 download did not create local file: {s3_uri}", status_code=500)

@@ -71,6 +71,10 @@ s3://{ARTIFACT_BUCKET}/reports/{roundId}/evaluation.json
 
 `POST /clients/fl-model/batch`는 Backend DB bytea 기반 전달을 위한 multipart 호환 API입니다. 수신 파일은 Git repo가 아니라 `MODEL_LOCAL_DIR/{round_id}/clients` 아래에 임시 저장되며, 응답에는 로컬 path를 포함하지 않습니다.
 
+운영 환경에서는 metadata에 `modelOutputPrefixUri` 또는 `outputPrefixUri`를 넣어 수신 모델을 즉시 S3에 업로드할 수 있습니다. 이 모드에서는 응답의 `modelArtifactUris`를 다음 aggregation 호출의 `modelArtifactUri`로 넘기고, AI 서버는 업로드 후 로컬 임시 파일을 삭제합니다.
+
+Docker 이미지는 ECS CPU 런타임 기준으로 PyTorch CPU wheel(`torch==2.5.1+cpu`)을 사용합니다. GPU 런타임이 아닌 환경에서 CUDA wheel을 포함하면 이미지가 과도하게 커져 ECR push와 ECS pull 시간이 크게 늘어납니다.
+
 이 저장소는 Fedstock 서비스의 중앙 서버 측 연합학습(FL) 시스템 모듈을 포함하고 있습니다. 연합학습 전체 라운드를 오케스트레이션하고 모델 가중치를 집계하는 FL Server 및 EMD 기반 매장 버블 군집화 코어를 제공합니다.
 
 > [!NOTE]

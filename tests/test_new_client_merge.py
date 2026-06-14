@@ -18,6 +18,7 @@ import sys
 import types
 
 import numpy as np
+import pytest
 
 # Make "src..." importable when run from the repo root.
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,6 +39,11 @@ from src.fl.server import BubbleServer  # noqa: E402
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def tmp_output(tmp_path):
+    return str(tmp_path)
+
 
 def importance_vector(strong_indices, dim=12, floor=0.05, peak=1.0):
     """Build a feature-importance vector that emphasises a few dimensions."""

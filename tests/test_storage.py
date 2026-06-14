@@ -68,6 +68,41 @@ def test_build_s3_uri_uses_env_bucket() -> None:
             os.environ["ARTIFACT_BUCKET"] = old_value
 
 
+def test_validate_artifact_bucket_uri_accepts_configured_bucket() -> None:
+    old_value = os.environ.get("ARTIFACT_BUCKET")
+    os.environ["ARTIFACT_BUCKET"] = "fedstock-artifacts"
+    try:
+        bucket, key = storage.validate_artifact_bucket_uri(
+            "s3://fedstock-artifacts/models/global.pt",
+            "modelArtifactUri",
+        )
+        assert bucket == "fedstock-artifacts"
+        assert key == "models/global.pt"
+    finally:
+        if old_value is None:
+            os.environ.pop("ARTIFACT_BUCKET", None)
+        else:
+            os.environ["ARTIFACT_BUCKET"] = old_value
+
+
+def test_validate_artifact_bucket_uri_rejects_other_bucket() -> None:
+    old_value = os.environ.get("ARTIFACT_BUCKET")
+    os.environ["ARTIFACT_BUCKET"] = "fedstock-artifacts"
+    try:
+        try:
+            storage.validate_artifact_bucket_uri("s3://other-bucket/models/global.pt", "modelArtifactUri")
+        except storage.StorageError as exc:
+            assert exc.status_code == 400
+            assert "ARTIFACT_BUCKET" in exc.message
+        else:
+            raise AssertionError("bucket mismatch should fail")
+    finally:
+        if old_value is None:
+            os.environ.pop("ARTIFACT_BUCKET", None)
+        else:
+            os.environ["ARTIFACT_BUCKET"] = old_value
+
+
 def test_download_s3_file_uses_client(tmp_path: Path) -> None:
     client = FakeS3Client()
     local_path = tmp_path / "models" / "global.pt"
@@ -105,6 +140,8 @@ def run() -> int:
         ("parse rejects invalid scheme", test_parse_s3_uri_rejects_invalid_scheme),
         ("build s3 uri", test_build_s3_uri),
         ("build s3 uri uses env bucket", test_build_s3_uri_uses_env_bucket),
+        ("validate accepts configured bucket", test_validate_artifact_bucket_uri_accepts_configured_bucket),
+        ("validate rejects other bucket", test_validate_artifact_bucket_uri_rejects_other_bucket),
         ("download uses client", test_download_s3_file_uses_client),
         ("upload uses client", test_upload_s3_file_uses_client),
     ]

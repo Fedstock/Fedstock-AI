@@ -38,12 +38,23 @@ def _model_bytes(value: float) -> bytes:
 def patched_model_dir():
     old_env = os.environ.get("MODEL_LOCAL_DIR")
     old_model_dir = getattr(main, "MODEL_LOCAL_DIR", None)
+    old_upload = getattr(main, "upload_s3_file", None)
     shutil.rmtree(TEST_ROOT, ignore_errors=True)
     TEST_ROOT.mkdir(parents=True, exist_ok=True)
     os.environ["MODEL_LOCAL_DIR"] = str(TEST_ROOT / "models")
     main.MODEL_LOCAL_DIR = Path(os.environ["MODEL_LOCAL_DIR"])
+    uploaded: dict[str, Path] = {}
+
+    def fake_upload(local_path: Path, uri: str) -> str:
+        copied = TEST_ROOT / "uploaded" / Path(uri).name
+        copied.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(local_path, copied)
+        uploaded[uri] = copied
+        return uri
+
+    main.upload_s3_file = fake_upload
     try:
-        yield
+        yield uploaded
     finally:
         if old_env is None:
             os.environ.pop("MODEL_LOCAL_DIR", None)
@@ -51,6 +62,8 @@ def patched_model_dir():
             os.environ["MODEL_LOCAL_DIR"] = old_env
         if old_model_dir is not None:
             main.MODEL_LOCAL_DIR = old_model_dir
+        if old_upload is not None:
+            main.upload_s3_file = old_upload
         shutil.rmtree(TEST_ROOT, ignore_errors=True)
 
 
@@ -84,6 +97,41 @@ def test_batch_accepts_metadata_and_model_files() -> None:
             "received_client_count": 2,
         }
         assert (main.MODEL_LOCAL_DIR / "fl-sync-1" / "clients" / "client_A.pt").exists()
+
+
+def test_batch_uploads_to_s3_when_output_prefix_is_provided() -> None:
+    with patched_model_dir() as uploaded:
+        client = TestClient(main.app)
+        metadata = _metadata()
+        metadata["modelOutputPrefixUri"] = "s3://bucket/updates/fl-sync-1/clients"
+        response = client.post(
+            "/clients/fl-model/batch",
+            files=[
+                ("metadata", (None, json.dumps(metadata), "application/json")),
+                ("model_files", ("client_A.pt", _model_bytes(1.0), "application/octet-stream")),
+                ("model_files", ("client_B.pt", _model_bytes(2.0), "application/octet-stream")),
+            ],
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["received_client_count"] == 2
+        assert body["modelArtifactUris"] == [
+            {
+                "clientId": "A",
+                "filename": "client_A.pt",
+                "modelArtifactUri": "s3://bucket/updates/fl-sync-1/clients/client_A.pt",
+            },
+            {
+                "clientId": "B",
+                "filename": "client_B.pt",
+                "modelArtifactUri": "s3://bucket/updates/fl-sync-1/clients/client_B.pt",
+            },
+        ]
+        assert set(uploaded) == {
+            "s3://bucket/updates/fl-sync-1/clients/client_A.pt",
+            "s3://bucket/updates/fl-sync-1/clients/client_B.pt",
+        }
+        assert not (main.MODEL_LOCAL_DIR / "fl-sync-1" / "clients").exists()
 
 
 def test_batch_rejects_missing_metadata() -> None:
@@ -136,6 +184,7 @@ def test_batch_rejects_invalid_model_file() -> None:
 def run() -> int:
     tests = [
         ("batch accepts metadata and model files", test_batch_accepts_metadata_and_model_files),
+        ("batch uploads to s3 when output prefix is provided", test_batch_uploads_to_s3_when_output_prefix_is_provided),
         ("batch rejects missing metadata", test_batch_rejects_missing_metadata),
         ("batch rejects expected count mismatch", test_batch_rejects_expected_count_mismatch),
         ("batch rejects invalid model file", test_batch_rejects_invalid_model_file),
