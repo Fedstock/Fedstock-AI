@@ -132,6 +132,8 @@ def test_single_client_assignment():
     check("single client cluster id is 0", body.get("clusterId") == 0, body)
     check("single client cluster members include new client", "N1" in body.get("clusterMembers", []), body)
     check("single client queue completed", body.get("queueStatus") == "completed", body)
+    check("single client response includes model download url", body.get("modelDownloadUrl") == "/ai/clients/N1/fl-model", body)
+    check("single client response model format", body.get("modelFormat") == "pytorch_state_dict", body)
 
 
 def test_all_clients_queue_and_complete():

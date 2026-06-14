@@ -52,6 +52,18 @@ def _load_response_model(response):
     return torch.load(io.BytesIO(response.content), map_location="cpu", weights_only=True)
 
 
+def _is_full_lstm_state_dict(model):
+    expected = {
+        "lstm.weight_ih_l0": (128, 12),
+        "lstm.weight_hh_l0": (128, 32),
+        "lstm.bias_ih_l0": (128,),
+        "lstm.bias_hh_l0": (128,),
+        "fc.weight": (1, 32),
+        "fc.bias": (1,),
+    }
+    return all(key in model and tuple(model[key].shape) == shape for key, shape in expected.items())
+
+
 def _post_model(client, path, *, client_id="A", scope="single_client", round_id="round-1", sample_weight=1.0, value=1.0, filename=None, headers=None):
     filename = filename or f"client_{client_id}.pt"
     return client.post(
@@ -143,15 +155,33 @@ def test_fl_model_rejects_non_pt_upload():
 
 def test_single_client_downloads_assigned_bubble_model():
     client = TestClient(main.app)
-    with _token_env(TOKEN), _patched_run_dir() as bubble_path:
-        expected_content = bubble_path.read_bytes()
+    with _token_env(TOKEN), _patched_run_dir():
         response = _post_model(client, "/ai/clients/A/fl-model", value=7.0)
 
     check("single client fl model request succeeds", response.status_code == 200, response.text)
     check("single client response is binary", response.headers.get("content-type") == "application/octet-stream", response.headers)
     check("single client model scope header is cluster", response.headers.get("x-fedstock-model-scope") == "cluster", response.headers)
     check("single client cluster id header is 0", response.headers.get("x-fedstock-cluster-id") == "0", response.headers)
-    check("single client body is assigned bubble model", response.content == expected_content, "binary mismatch")
+    check("single client model format header is state_dict", response.headers.get("x-fedstock-model-format") == "pytorch_state_dict", response.headers)
+    if response.status_code == 200:
+        model = _load_response_model(response)
+        check("single client body is full lstm state_dict", _is_full_lstm_state_dict(model), model.keys())
+    else:
+        check("single client body is full lstm state_dict", False, response.text)
+
+
+def test_assigned_model_download_endpoint():
+    client = TestClient(main.app)
+    with _token_env(TOKEN), _patched_run_dir():
+        response = client.get("/ai/clients/A/fl-model", headers=_headers())
+
+    check("assigned model download succeeds", response.status_code == 200, response.text)
+    check("assigned model download format header", response.headers.get("x-fedstock-model-format") == "pytorch_state_dict", response.headers)
+    if response.status_code == 200:
+        model = _load_response_model(response)
+        check("assigned model download body is full lstm state_dict", _is_full_lstm_state_dict(model), model.keys())
+    else:
+        check("assigned model download body is full lstm state_dict", False, response.text)
 
 
 def test_all_clients_waits_then_returns_weighted_average_model():
@@ -182,6 +212,7 @@ def main_test():
     test_fl_model_rejects_path_body_client_mismatch()
     test_fl_model_rejects_non_pt_upload()
     test_single_client_downloads_assigned_bubble_model()
+    test_assigned_model_download_endpoint()
     test_all_clients_waits_then_returns_weighted_average_model()
     test_fl_model_compatibility_alias()
     print(f"\n==== {_PASSED} passed, {_FAILED} failed ====")

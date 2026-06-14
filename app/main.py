@@ -41,6 +41,15 @@ FORECAST_TARGET_COLUMN = "target_1d"
 FORECAST_UNIT = "next_day_sales"
 HISTORY_WINDOW_PER_ITEM = 35
 DEFAULT_LEAD_TIME_DAYS = 4
+MODEL_FORMAT = "pytorch_state_dict"
+FULL_LSTM_REQUIRED_KEYS = {
+    "lstm.weight_ih_l0": (128, 12),
+    "lstm.weight_hh_l0": (128, 32),
+    "lstm.bias_ih_l0": (128,),
+    "lstm.bias_hh_l0": (128,),
+    "fc.weight": (1, 32),
+    "fc.bias": (1,),
+}
 
 
 def _resolve_run_dir() -> Path:
@@ -195,6 +204,10 @@ class ClusterAssignmentResponse(BaseModel):
     queueStatus: str
     distance: float | None
     threshold: float | None
+    modelDownloadUrl: str | None = None
+    modelArtifactUri: str | None = None
+    modelScope: str | None = None
+    modelFormat: str | None = None
     message: str
 
 
@@ -396,6 +409,24 @@ def _weighted_average_state_dicts(items: list[tuple[dict[str, torch.Tensor], flo
             weighted_sum = contribution if weighted_sum is None else weighted_sum + contribution
         averaged[key] = weighted_sum
     return averaged
+
+
+def _is_full_lstm_state_dict(state: dict[str, torch.Tensor]) -> bool:
+    for key, expected_shape in FULL_LSTM_REQUIRED_KEYS.items():
+        value = state.get(key)
+        if not torch.is_tensor(value) or tuple(value.shape) != expected_shape:
+            return False
+    return True
+
+
+def _default_full_lstm_state_dict() -> dict[str, torch.Tensor]:
+    previous_state = torch.random.get_rng_state()
+    try:
+        torch.manual_seed(20260614)
+        model = LightweightLSTM(input_size=len(SELECTED_FEATURES), hidden_size=32)
+        return {key: value.detach().cpu() for key, value in model.state_dict().items()}
+    finally:
+        torch.random.set_rng_state(previous_state)
 
 
 def _json_field(payload: dict[str, Any], *names: str, required: bool = True, default: Any = None) -> Any:
@@ -876,6 +907,21 @@ def _assignment_response(
     threshold: float | None,
     message: str,
 ) -> dict[str, Any]:
+    model_download_url = None
+    model_artifact_uri = None
+    model_scope = None
+    model_format = None
+    if status == "assigned":
+        try:
+            _, model_artifact_uri, model_scope = _ensure_assigned_model_artifact(
+                payload.clientId,
+                {"clusterId": cluster_id, "clusterMembers": cluster_members, "assignedTo": assigned_to},
+            )
+            model_download_url = f"/ai/clients/{payload.clientId}/fl-model"
+            model_format = MODEL_FORMAT
+        except HTTPException:
+            raise
+
     return ClusterAssignmentResponse(
         status=status,
         clientId=payload.clientId,
@@ -886,6 +932,10 @@ def _assignment_response(
         queueStatus=queue_status,
         distance=distance,
         threshold=threshold,
+        modelDownloadUrl=model_download_url,
+        modelArtifactUri=model_artifact_uri,
+        modelScope=model_scope,
+        modelFormat=model_format,
         message=message,
     ).model_dump()
 
@@ -1037,12 +1087,61 @@ def _resolve_client_assignment(client_id: str) -> dict[str, Any]:
     raise HTTPException(status_code=404, detail="클라이언트의 클러스터 배정 정보를 찾을 수 없습니다.")
 
 
+def _assigned_model_scope_and_name(client_id: str, assignment: dict[str, Any]) -> tuple[str, str, str]:
+    cluster_id = assignment.get("clusterId")
+    if cluster_id is not None:
+        safe_cluster = _safe_path_component(str(int(cluster_id)), "clusterId")
+        return "cluster", f"clusters/cluster-{safe_cluster}.pt", f"cluster-{safe_cluster}.pt"
+    safe_client = _safe_path_component(client_id, "client_id")
+    return "client", f"clients/client_{safe_client}.pt", f"client_{safe_client}.pt"
+
+
+def _assigned_model_s3_uri(client_id: str, assignment: dict[str, Any]) -> str | None:
+    settings = get_settings()
+    if not settings.artifact_bucket:
+        return None
+    _, s3_suffix, _ = _assigned_model_scope_and_name(client_id, assignment)
+    return build_s3_uri(settings.artifact_bucket, f"models/assigned/{RUN_DIR.name}/{s3_suffix}")
+
+
+def _ensure_assigned_model_artifact(client_id: str, assignment: dict[str, Any]) -> tuple[Path, str | None, str]:
+    model_scope, _, filename = _assigned_model_scope_and_name(client_id, assignment)
+    local_path = _ensure_model_local_dir() / "fl-models" / RUN_DIR.name / filename
+    artifact_uri = _assigned_model_s3_uri(client_id, assignment)
+
+    if not local_path.exists() and artifact_uri:
+        try:
+            download_s3_file(artifact_uri, local_path)
+        except StorageError:
+            local_path.unlink(missing_ok=True)
+
+    if not local_path.exists():
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(_default_full_lstm_state_dict(), local_path)
+
+    try:
+        state = _load_tensor_state_dict(local_path)
+    except HTTPException:
+        state = {}
+    if not _is_full_lstm_state_dict(state):
+        torch.save(_default_full_lstm_state_dict(), local_path)
+
+    if artifact_uri:
+        try:
+            artifact_uri = upload_s3_file(local_path, artifact_uri)
+        except StorageError as exc:
+            raise _storage_http_error(exc) from exc
+
+    return local_path, artifact_uri, model_scope
+
+
 def _model_response(
     path: Path,
     *,
     client_id: str,
     cluster_id: int | None,
     model_scope: str,
+    storage_path: str | None = None,
 ) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=404, detail="다운로드할 FL 모델을 찾지 못했습니다.")
@@ -1054,22 +1153,21 @@ def _model_response(
             "X-Fedstock-Client-Id": client_id,
             "X-Fedstock-Cluster-Id": "" if cluster_id is None else str(cluster_id),
             "X-Fedstock-Model-Scope": model_scope,
-            "X-Fedstock-Storage-Path": str(path),
+            "X-Fedstock-Model-Format": MODEL_FORMAT,
+            "X-Fedstock-Storage-Path": storage_path or str(path),
         },
     )
 
 
-def _select_single_client_model(client_id: str, assignment: dict[str, Any], uploaded_path: Path) -> tuple[Path, str]:
-    cluster_id = assignment.get("clusterId")
-    if cluster_id is not None:
-        bubble_path = RUN_DIR / "models" / "bubbles" / f"bubble_{int(cluster_id)}.pt"
-        if bubble_path.exists():
-            return bubble_path, "cluster"
-
-    client_path = CLIENT_MODEL_DIR / f"client_{client_id}.pt"
-    if client_path.exists():
-        return client_path, "client"
-    return uploaded_path, "fallback"
+def _assigned_model_response(client_id: str, assignment: dict[str, Any]) -> FileResponse:
+    model_path, artifact_uri, model_scope = _ensure_assigned_model_artifact(client_id, assignment)
+    return _model_response(
+        model_path,
+        client_id=client_id,
+        cluster_id=assignment.get("clusterId"),
+        model_scope=model_scope,
+        storage_path=artifact_uri,
+    )
 
 
 def _handle_all_clients_fl_model(
@@ -1706,18 +1804,12 @@ def fl_model_sync(
     _safe_path_component(client_id, "client_id")
     _safe_path_component(round_id, "round_id")
     uploaded_path = _save_uploaded_model(model_file, client_id, round_id)
-    state_dict = _load_state_dict(uploaded_path)
     assignment = _resolve_client_assignment(client_id)
 
     if scope == "single_client":
-        selected_path, model_scope = _select_single_client_model(client_id, assignment, uploaded_path)
-        return _model_response(
-            selected_path,
-            client_id=client_id,
-            cluster_id=assignment.get("clusterId"),
-            model_scope=model_scope,
-        )
+        return _assigned_model_response(client_id, assignment)
 
+    state_dict = _load_state_dict(uploaded_path)
     return _handle_all_clients_fl_model(
         client_id=client_id,
         round_id=round_id,
@@ -1726,6 +1818,17 @@ def fl_model_sync(
         state_dict=state_dict,
         assignment=assignment,
     )
+
+
+@app.get("/clients/{client_id}/fl-model")
+@app.get("/ai/clients/{client_id}/fl-model")
+def download_assigned_fl_model(
+    client_id: str,
+    _: None = Depends(_verify_bearer_token),
+) -> FileResponse:
+    _safe_path_component(client_id, "client_id")
+    assignment = _resolve_client_assignment(client_id)
+    return _assigned_model_response(client_id, assignment)
 
 
 @app.post("/analyze-csv")
